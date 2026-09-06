@@ -86,7 +86,12 @@ export class VoiceActivityDetector {
             this.speechStartTime = now;
           } else if (now - this.speechStartTime >= this.minSpeechDurationMs) {
             this.isSpeaking = true;
-            console.log("[VOXFLOW-MIC-DEBUG] VOICE START");
+            console.log("[VOXFLOW-MIC] G. VAD voice detected (VOICE START)", {
+              rms: rms.toFixed(4),
+              normalizedLevel: normalizedLevel.toFixed(4),
+              threshold: effectiveThreshold.toFixed(4),
+              timestamp: Date.now(),
+            });
             this.callbacks.onSpeechStart();
           }
         }

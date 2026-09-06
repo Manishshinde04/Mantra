@@ -33,6 +33,17 @@ export function SessionView() {
 
   const hasMessages = messages.length > 0;
 
+  const handleMicClick = (e?: React.MouseEvent) => {
+    console.log("[VOXFLOW-MIC] A. MIC BUTTON CLICK:", {
+      timestamp: Date.now(),
+      eventType: e?.type || "click",
+      userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+      userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
+      currentState: session.state,
+    });
+    toggleSession();
+  };
+
   return (
     <main className="relative flex flex-col min-h-screen w-full bg-[#08080a] text-zinc-100 selection:bg-zinc-800">
       {/* Subtle Ambient Radial Glow (Quiet, deep, Apple-like) */}
@@ -74,7 +85,7 @@ export function SessionView() {
               <VoiceOrb
                 state={session.state}
                 audioLevels={session.audioLevels}
-                onClick={toggleSession}
+                onClick={handleMicClick}
                 size="md"
               />
             </div>
@@ -96,7 +107,7 @@ export function SessionView() {
             {/* Floating Circular Microphone Button */}
             <button
               type="button"
-              onClick={toggleSession}
+              onClick={handleMicClick}
               aria-label={
                 session.state === "listening"
                   ? "Stop listening"

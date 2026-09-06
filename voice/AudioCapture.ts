@@ -38,65 +38,73 @@ export class AudioCapture {
     const isDev = process.env.NODE_ENV === "development";
 
     try {
-      if (isDev) {
-        console.log("[VOXFLOW-MIC-DEBUG] requesting getUserMedia");
-      }
+      console.log("[VOXFLOW-MIC] C. getUserMedia() called", {
+        constraints,
+        userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+      });
+
       try {
         this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log("[VOXFLOW-MIC] C. getUserMedia() SUCCESS");
       } catch (firstErr: any) {
+        console.warn("[VOXFLOW-MIC] C. getUserMedia() primary attempt threw:", {
+          name: firstErr?.name,
+          message: firstErr?.message,
+        });
         if (firstErr?.name === "OverconstrainedError") {
-          if (isDev) {
-            console.warn("[VOXFLOW-MIC-DEBUG] OverconstrainedError; retrying with basic audio constraints");
-          }
+          console.warn("[VOXFLOW-MIC] C. getUserMedia() retrying with basic { audio: true }");
           this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          console.log("[VOXFLOW-MIC] C. getUserMedia() fallback SUCCESS");
         } else {
           throw firstErr;
         }
       }
 
-      if (isDev) {
-        console.log("[VOXFLOW-MIC-DEBUG] getUserMedia SUCCESS");
-        console.log("[VOXFLOW-MIC-DEBUG] stream active =", this.stream.active);
-        console.log(
-          "[VOXFLOW-MIC-DEBUG] audio tracks =",
-          this.stream
-            .getAudioTracks()
-            .map((t) => `${t.label} (enabled=${t.enabled}, readyState=${t.readyState}, muted=${t.muted})`)
-            .join(", ")
-        );
-      }
+      const track = this.stream.getAudioTracks()[0];
+      console.log("[VOXFLOW-MIC] D. MEDIA STREAM:", {
+        streamActive: this.stream.active,
+        audioTrackExists: !!track,
+        readyState: track?.readyState,
+        enabled: track?.enabled,
+        muted: track?.muted,
+        settings: track?.getSettings ? track.getSettings() : {},
+      });
 
       // Create or reuse Web Audio Context for energy measurement
-      if (!this.audioContext || this.audioContext.state === "closed") {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const wasExisting = !!this.audioContext && this.audioContext.state !== "closed";
+      if (!wasExisting) {
         this.audioContext = new AudioCtx();
       }
 
-      console.log(`[VOXFLOW-MIC-DEBUG] AudioContext state = ${this.audioContext.state}`);
+      console.log("[VOXFLOW-MIC] E. AUDIO CONTEXT:", {
+        created: !wasExisting,
+        stateBeforeResume: this.audioContext!.state,
+      });
 
       // Ensure context is running (handles browser autoplay resume)
-      if (this.audioContext.state === "suspended") {
-        console.log("[VOXFLOW-MIC-DEBUG] AudioContext resume called");
+      if (this.audioContext!.state === "suspended") {
+        console.log("[VOXFLOW-MIC] E. AUDIO CONTEXT resume() called");
         try {
-          await this.audioContext.resume();
-        } catch (err) {
-          console.warn("[VOXFLOW-MIC-DEBUG] AudioContext resume error:", err);
+          await this.audioContext!.resume();
+        } catch (err: any) {
+          console.warn("[VOXFLOW-MIC] E. AUDIO CONTEXT resume error:", err?.name, err?.message);
         }
-        console.log(`[VOXFLOW-MIC-DEBUG] AudioContext state after resume = ${this.audioContext.state}`);
       }
+      console.log("[VOXFLOW-MIC] E. AUDIO CONTEXT stateAfterResume:", this.audioContext!.state);
 
       // Attach user-gesture listener as safety in case browser autoplay policy suspended it
       this.attachGestureUnlock();
 
-      this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
-      this.analyserNode = this.audioContext.createAnalyser();
+      this.sourceNode = this.audioContext!.createMediaStreamSource(this.stream);
+      this.analyserNode = this.audioContext!.createAnalyser();
       this.analyserNode.fftSize = 256;
       this.analyserNode.smoothingTimeConstant = 0.3;
-      console.log("[VOXFLOW-MIC-DEBUG] analyser created");
+      console.log("[VOXFLOW-MIC] G. VAD analyser created");
 
       // Connect source to analyser only (NEVER to destination, avoiding feedback!)
       this.sourceNode.connect(this.analyserNode);
-      console.log("[VOXFLOW-MIC-DEBUG] analyser connected");
+      console.log("[VOXFLOW-MIC] G. VAD analyser connected");
 
       // Verify analyser is active and receiving samples before declaring ready
       await this.waitForAnalyserReady(this.analyserNode);

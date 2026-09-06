@@ -168,6 +168,11 @@ export function useVoiceSession() {
 
       telemetryRef.current.geminiStarted = Date.now();
       console.log(`[CHAT] start requestId=${requestId} turns=${validHistory.length}`);
+      console.log("[VOXFLOW-MIC] I. GEMINI request started", {
+        requestId,
+        finalTranscript: validHistory[validHistory.length - 1]?.content,
+        timestamp: Date.now(),
+      });
 
       let assistantMsgId: string | null = null;
       let previousTextLength = 0;
@@ -179,6 +184,7 @@ export function useVoiceSession() {
             onChunk: (accumulatedText, genId) => {
               if (!telemetryRef.current.firstGeminiText) {
                 telemetryRef.current.firstGeminiText = Date.now();
+                console.log("[VOXFLOW-MIC] I. GEMINI response started", { timestamp: Date.now() });
               }
 
               // 1. Initialize TTSSession on first chunk if not yet created
@@ -431,6 +437,12 @@ export function useVoiceSession() {
       const text = chunk.text.trim();
       if (!text) return;
 
+      console.log("[VOXFLOW-MIC] H. TRANSCRIPT:", {
+        isFinal: chunk.isFinal,
+        text,
+        timestamp: Date.now(),
+      });
+
       // Full-duplex barge-in: Only interrupt when assistant is actively SPEAKING audio.
       if (sessionStateRef.current === "speaking") {
         handleBargeInRef.current();
@@ -612,7 +624,12 @@ export function useVoiceSession() {
     if (!managerRef.current) return;
     if (isStartingRef.current || managerRef.current.getState() === "listening") return;
     isStartingRef.current = true;
-    console.log("[VOXFLOW-MIC-DEBUG] startListening called (user action)");
+    console.log("[VOXFLOW-MIC] B. startSession() entered", {
+      timestamp: Date.now(),
+      stateBefore: session.state,
+      userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+      userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
+    });
     try {
       setSession((prev) => ({ ...prev, errorMessage: null }));
 
@@ -630,12 +647,17 @@ export function useVoiceSession() {
         echoCancellation: audioConfig.echoCancellation,
         autoGainControl: audioConfig.autoGainControl,
       });
-    } catch {
-      // Error handled via event listener
+
+      console.log("[VOXFLOW-MIC] B. startSession() completed", {
+        timestamp: Date.now(),
+        stateAfter: session.state,
+      });
+    } catch (err: any) {
+      console.error("[VOXFLOW-MIC] B. startSession() error:", err?.message || err);
     } finally {
       isStartingRef.current = false;
     }
-  }, [audioConfig]);
+  }, [audioConfig, session.state]);
 
   // Stop microphone listening
   const stopSession = useCallback(() => {

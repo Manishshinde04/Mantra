@@ -274,6 +274,8 @@ export class VoiceInputManager {
 
     try {
       const recognizer = new SpeechRecognition();
+      console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION constructor called");
+
       recognizer.continuous = true;
       recognizer.interimResults = true;
       recognizer.maxAlternatives = 1;
@@ -285,9 +287,16 @@ export class VoiceInputManager {
         "en-US";
       recognizer.lang = preferredLang;
 
+      console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION config:", {
+        lang: recognizer.lang,
+        continuous: recognizer.continuous,
+        interimResults: recognizer.interimResults,
+      });
+
       this.speechRecognizer = recognizer;
 
       recognizer.onstart = () => {
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onstart");
         if (gen !== this.recognitionGeneration || this.isExplicitlyStopped || this.state !== "listening") {
           try { recognizer.abort(); } catch {}
           return;
@@ -296,13 +305,18 @@ export class VoiceInputManager {
         this.isRecognitionStarting = false;
         this.isRecognitionRunning = true;
         this.consecutiveRestarts = 0;
+      };
 
-        if (this.isDevLogs()) {
-          console.log("[VOXFLOW-STT] onstart");
-          if (wasRestart) {
-            console.log("[VOXFLOW-STT] restart successful");
-          }
-        }
+      recognizer.onaudiostart = () => {
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onaudiostart");
+      };
+
+      recognizer.onsoundstart = () => {
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onsoundstart");
+      };
+
+      recognizer.onspeechstart = () => {
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onspeechstart");
       };
 
       recognizer.onresult = (event: any) => {
@@ -326,19 +340,18 @@ export class VoiceInputManager {
         const trimmedFinal = finalTranscript.trim();
         const trimmedInterim = interimTranscript.trim();
 
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onresult:", {
+          interim: trimmedInterim || null,
+          final: trimmedFinal || null,
+        });
+
         if (trimmedFinal) {
-          if (this.isDevLogs()) {
-            console.log(`[VOXFLOW-MIC-DEBUG] FINAL TRANSCRIPT: ${trimmedFinal}`);
-          }
           this.emitter.emit("transcript", {
             text: trimmedFinal,
             isFinal: true,
             timestamp: Date.now(),
           });
         } else if (trimmedInterim) {
-          if (this.isDevLogs()) {
-            console.log(`[VOXFLOW-MIC-DEBUG] PARTIAL TRANSCRIPT: ${trimmedInterim}`);
-          }
           this.emitter.emit("transcript", {
             text: trimmedInterim,
             isFinal: false,
@@ -347,46 +360,55 @@ export class VoiceInputManager {
         }
       };
 
+      recognizer.onspeechend = () => {
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onspeechend");
+      };
+
+      recognizer.onsoundend = () => {
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onsoundend");
+      };
+
+      recognizer.onaudioend = () => {
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onaudioend");
+      };
+
       recognizer.onerror = (event: any) => {
-        if (gen !== this.recognitionGeneration) return;
         const errCode = event.error;
+        console.error("[VOXFLOW-MIC] F. SPEECH RECOGNITION onerror:", {
+          error: errCode,
+          message: (event as any).message || "",
+          currentState: this.state,
+          generationToken: gen,
+          activeToken: this.recognitionGeneration,
+          willRestart: (this.state === "listening" && !this.isExplicitlyStopped),
+        });
 
-        if (errCode === "no-speech") {
-          if (this.isDevLogs()) {
-            console.log("[VOXFLOW-STT] onerror: no-speech");
-          }
-          // Do not emit fatal error. Chrome will fire onend next, which schedules restart.
+        if (gen !== this.recognitionGeneration) return;
+
+        if (errCode === "no-speech" || errCode === "aborted") {
           return;
-        }
-
-        if (errCode === "aborted") {
-          if (this.isDevLogs()) {
-            console.log("[VOXFLOW-STT] onerror: aborted");
-          }
-          return;
-        }
-
-        if (this.isDevLogs()) {
-          console.log(`[VOXFLOW-STT] onerror: ${errCode}`);
         }
 
         if (errCode === "not-allowed") {
           this.emitter.emit("error", {
             type: "permission-denied",
-            message: "Microphone permission is required to transcribe speech.",
+            message: "Microphone access is blocked. Allow microphone access and try again.",
             originalError: event,
           });
         }
       };
 
       recognizer.onend = () => {
+        console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onend", {
+          gen,
+          activeGen: this.recognitionGeneration,
+          state: this.state,
+          isExplicitlyStopped: this.isExplicitlyStopped,
+        });
+
         if (gen !== this.recognitionGeneration) return;
         this.isRecognitionRunning = false;
         this.isRecognitionStarting = false;
-
-        if (this.isDevLogs()) {
-          console.log("[VOXFLOW-STT] onend");
-        }
 
         // If user intentionally stopped or session is no longer listening, do nothing
         if (this.isExplicitlyStopped || this.state !== "listening") {
@@ -397,16 +419,18 @@ export class VoiceInputManager {
         this.scheduleSpeechRecognitionRestart();
       };
 
-      if (this.isDevLogs()) {
-        console.log("[VOXFLOW-STT] start requested");
-      }
+      console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION start() called", {
+        userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+        userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
+      });
       recognizer.start();
     } catch (err: any) {
       this.isRecognitionStarting = false;
       this.isRecognitionRunning = false;
-      if (this.isDevLogs()) {
-        console.warn("[VOXFLOW-STT] start error:", err?.name, err?.message);
-      }
+      console.error("[VOXFLOW-MIC] F. SPEECH RECOGNITION start() threw:", {
+        name: err?.name,
+        message: err?.message,
+      });
       if (!this.isExplicitlyStopped && this.state === "listening") {
         this.scheduleSpeechRecognitionRestart();
       }

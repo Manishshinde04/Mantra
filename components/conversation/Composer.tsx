@@ -68,7 +68,16 @@ export function Composer({
         {/* Floating Circular Microphone Button */}
         <button
           type="button"
-          onClick={onMicClick}
+          onClick={(e) => {
+            console.log("[VOXFLOW-MIC] A. MIC BUTTON CLICK (Composer):", {
+              timestamp: Date.now(),
+              eventType: e.type,
+              userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+              userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
+              currentState: state,
+            });
+            onMicClick();
+          }}
           aria-label={
             state === "listening"
               ? "Stop listening"
