@@ -52,11 +52,12 @@ export class VoiceInputManager {
     return false;
   }
 
-  public async start(config: AudioCaptureConfig = {}): Promise<void> {
+  public start(config: AudioCaptureConfig = {}): void {
     if (this.state === "listening") {
       return;
     }
 
+    const tStart = performance.now();
     const token = ++this.initToken;
     this.isInitializing = true;
     this.isExplicitlyStopped = false;
@@ -68,18 +69,42 @@ export class VoiceInputManager {
       this.restartTimeout = null;
     }
 
+    // 1. Immediately switch state to listening so SpeechRecognition can start cleanly
+    this.state = "listening";
+    this.emitter.emit("startListening");
+
+    // 2. SYNCHRONOUS: Start speech recognition right now within the user gesture call stack
+    console.log("[VOXFLOW-MIC] start() synchronously calling startSpeechRecognitionSafely()", {
+      perfNow: tStart,
+      userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+      userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
+    });
+    this.startSpeechRecognitionSafely();
+
+    // 3. BACKGROUND: Initialize AudioCapture and VAD concurrently without blocking SpeechRecognition
+    void this.initializeAudioCaptureInBackground(config, token);
+  }
+
+  private async initializeAudioCaptureInBackground(
+    config: AudioCaptureConfig,
+    token: number
+  ): Promise<void> {
     try {
-      // 1. Capture microphone audio stream & obtain AnalyserNode
+      // Capture microphone audio stream & obtain AnalyserNode
       const analyser = await this.audioCapture.start(config);
 
       // Check if session was stopped or superseded while awaiting getUserMedia
-      if (token !== this.initToken || this.isExplicitlyStopped) {
+      if (
+        token !== this.initToken ||
+        this.isExplicitlyStopped ||
+        this.state !== "listening"
+      ) {
         this.audioCapture.stop();
         this.isInitializing = false;
         return;
       }
 
-      // 2. Start Voice Activity Detector (RMS energy + silence boundaries)
+      // Start Voice Activity Detector (RMS energy + silence boundaries)
       this.vad.start(analyser, {
         onAudioLevel: (level) => this.emitter.emit("audioLevel", level),
         onSpeechStart: () => {
@@ -91,36 +116,29 @@ export class VoiceInputManager {
 
       console.log("[VOXFLOW MIC] VAD ready");
       console.log("[VOXFLOW MIC] microphone ready");
-
-      // 3. Set state to listening BEFORE initializing & starting speech recognition
-      this.state = "listening";
       this.isInitializing = false;
-      if (this.isDevLogs()) {
-        console.log("[VOXFLOW-MIC-DEBUG] state set to listening");
-      }
-      console.log("[VOXFLOW MIC] listening started");
-
-      // 4. Safely start speech recognition with self-healing lifecycle
-      this.startSpeechRecognitionSafely();
-
-      this.emitter.emit("startListening");
     } catch (err: any) {
       this.isInitializing = false;
-      if (token !== this.initToken) return;
+      if (token !== this.initToken || this.isExplicitlyStopped) return;
 
-      this.state = "error";
-      const voiceError: VoiceInputError =
-        err?.type && err?.message
-          ? err
-          : {
-              type: "unknown",
-              message: "Failed to initialize microphone input.",
-              originalError: err,
-            };
+      console.warn("[VOXFLOW MIC] Background audio capture error:", err?.message || err);
 
-      this.stop();
-      this.emitter.emit("error", voiceError);
-      throw voiceError;
+      // If microphone access was explicitly blocked, emit permission error
+      const errName = (err as any)?.name || (err as any)?.type || "";
+      if (
+        errName === "NotAllowedError" ||
+        errName === "PermissionDeniedError" ||
+        err?.type === "permission-denied"
+      ) {
+        this.state = "error";
+        const voiceError: VoiceInputError = {
+          type: "permission-denied",
+          message: "Microphone access is blocked. Allow microphone access and try again.",
+          originalError: err,
+        };
+        this.stop();
+        this.emitter.emit("error", voiceError);
+      }
     }
   }
 

@@ -619,26 +619,26 @@ export function useVoiceSession() {
 
   const isStartingRef = useRef<boolean>(false);
 
-  // Start microphone listening (unlocks audio context simultaneously)
-  const startSession = useCallback(async () => {
+  // Start microphone listening (starts SpeechRecognition synchronously on user gesture)
+  const startSession = useCallback(() => {
     if (!managerRef.current) return;
     if (isStartingRef.current || managerRef.current.getState() === "listening") return;
     isStartingRef.current = true;
-    console.log("[VOXFLOW-MIC] B. startSession() entered", {
+
+    const tStart = performance.now();
+    console.log("[VOXFLOW-MIC] A. MIC CLICK -> startSession()", {
+      perfNow: tStart,
       timestamp: Date.now(),
       stateBefore: session.state,
       userActivationIsActive: (navigator as any)?.userActivation?.isActive,
       userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
     });
+
     try {
       setSession((prev) => ({ ...prev, errorMessage: null }));
 
-      // Unlock browser audio context during this explicit user click gesture
-      if (audioPlayerRef.current) {
-        await audioPlayerRef.current.unlockAudio();
-      }
-
-      await managerRef.current.start({
+      // 1. SYNCHRONOUS: Start speech recognition immediately within the user gesture call stack
+      managerRef.current.start({
         deviceId:
           audioConfig.selectedInputId !== "default"
             ? audioConfig.selectedInputId
@@ -648,9 +648,16 @@ export function useVoiceSession() {
         autoGainControl: audioConfig.autoGainControl,
       });
 
-      console.log("[VOXFLOW-MIC] B. startSession() completed", {
-        timestamp: Date.now(),
-        stateAfter: session.state,
+      // 2. BACKGROUND: Unlock browser audio player concurrently without awaiting
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.unlockAudio().catch((err: any) => {
+          console.warn("[VOXFLOW-MIC] Audio player unlock notice:", err?.message || err);
+        });
+      }
+
+      console.log("[VOXFLOW-MIC] B. startSession() dispatched synchronously", {
+        perfNow: performance.now(),
+        delayMs: performance.now() - tStart,
       });
     } catch (err: any) {
       console.error("[VOXFLOW-MIC] B. startSession() error:", err?.message || err);
