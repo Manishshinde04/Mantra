@@ -27,6 +27,10 @@ export function SessionView() {
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
+  React.useEffect(() => {
+    console.log("[VOXFLOW-MIC-DEBUG] component mounted");
+  }, []);
+
   const hasMessages = messages.length > 0;
 
   return (

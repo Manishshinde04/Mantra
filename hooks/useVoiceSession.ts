@@ -577,6 +577,7 @@ export function useVoiceSession() {
       });
     });
 
+    console.log("[VOXFLOW-MIC-DEBUG] voice hook initialized");
     let isCancelled = false;
 
     // Check browser microphone permission and initialize immediately if granted (or prompt)
@@ -590,7 +591,7 @@ export function useVoiceSession() {
           try {
             const status = await navigator.permissions.query({ name: "microphone" as PermissionName });
             if (status.state === "denied") {
-              console.log("[VOXFLOW MIC] permission status: denied");
+              console.log("[VOXFLOW-MIC-DEBUG] permission status = denied");
               return;
             }
           } catch {
@@ -599,6 +600,7 @@ export function useVoiceSession() {
         }
 
         if (!isCancelled && managerRef.current && managerRef.current.getState() !== "listening") {
+          console.log("[VOXFLOW-MIC-DEBUG] startListening called (auto-start on mount)");
           await managerRef.current.start({
             deviceId:
               audioConfig.selectedInputId !== "default"
@@ -646,6 +648,7 @@ export function useVoiceSession() {
     if (!managerRef.current) return;
     if (isStartingRef.current || managerRef.current.getState() === "listening") return;
     isStartingRef.current = true;
+    console.log("[VOXFLOW-MIC-DEBUG] startListening called (user action)");
     try {
       setSession((prev) => ({ ...prev, errorMessage: null }));
 

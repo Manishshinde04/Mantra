@@ -23,10 +23,14 @@ export class VoiceActivityDetector {
   private speechStartTime: number = 0;
   private lastAboveThresholdTime: number = 0;
 
+  // Sampling timer for diagnostic RMS logging
+  private lastRmsLogTime: number = 0;
+
   constructor(config: VADConfig = {}) {
     this.energyThreshold = config.energyThreshold ?? 0.035; // Sensitivity threshold
     this.silenceThresholdMs = config.silenceThresholdMs ?? 1500; // Time in ms to consider speech ended
     this.minSpeechDurationMs = config.minSpeechDurationMs ?? 100; // Minimum speech activity to trigger
+    console.log("[VOXFLOW-MIC-DEBUG] VAD created");
   }
 
   public setHysteresis(multiplier: number = 1.0): void {
@@ -42,6 +46,8 @@ export class VoiceActivityDetector {
     this.isSpeaking = false;
     this.speechStartTime = 0;
     this.lastAboveThresholdTime = 0;
+    this.lastRmsLogTime = performance.now();
+    console.log("[VOXFLOW-MIC-DEBUG] VAD started");
 
     const loop = () => {
       if (!this.analyser || !this.dataArray || !this.callbacks) return;
@@ -65,6 +71,12 @@ export class VoiceActivityDetector {
 
       const now = performance.now();
 
+      // Sample RMS approximately every 500ms
+      if (now - this.lastRmsLogTime >= 500) {
+        this.lastRmsLogTime = now;
+        console.log(`[VOXFLOW-MIC-DEBUG] RMS = ${rms.toFixed(5)} (normalized = ${normalizedLevel.toFixed(4)})`);
+      }
+
       const effectiveThreshold = this.energyThreshold * this.thresholdMultiplier;
       if (normalizedLevel > effectiveThreshold) {
         this.lastAboveThresholdTime = now;
@@ -74,6 +86,7 @@ export class VoiceActivityDetector {
             this.speechStartTime = now;
           } else if (now - this.speechStartTime >= this.minSpeechDurationMs) {
             this.isSpeaking = true;
+            console.log("[VOXFLOW-MIC-DEBUG] VOICE START");
             this.callbacks.onSpeechStart();
           }
         }

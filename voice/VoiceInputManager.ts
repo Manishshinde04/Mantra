@@ -78,12 +78,15 @@ export class VoiceInputManager {
       console.log("[VOXFLOW MIC] VAD ready");
       console.log("[VOXFLOW MIC] microphone ready");
 
-      // 3. Initialize & start speech recognition if available in browser
-      this.initSpeechRecognition();
-
+      // 3. Set state to listening BEFORE initializing & starting speech recognition
       this.state = "listening";
       this.isInitializing = false;
+      console.log("[VOXFLOW-MIC-DEBUG] state set to listening");
       console.log("[VOXFLOW MIC] listening started");
+
+      // 4. Initialize & start speech recognition (safeStart now sees this.state === "listening")
+      this.initSpeechRecognition();
+
       this.emitter.emit("startListening");
     } catch (err: any) {
       this.isInitializing = false;
@@ -197,9 +200,11 @@ export class VoiceInputManager {
       recognizer.interimResults = true;
       recognizer.maxAlternatives = 1;
       this.speechRecognizer = recognizer;
+      console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition created");
 
       recognizer.onstart = () => {
         this.isRecognizerActive = true;
+        console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition onstart");
       };
 
       recognizer.onresult = (event: any) => {
@@ -221,13 +226,14 @@ export class VoiceInputManager {
         const trimmedInterim = interimTranscript.trim();
 
         if (trimmedFinal) {
-          console.log(`[VOXFLOW MIC] final transcript: ${trimmedFinal}`);
+          console.log(`[VOXFLOW-MIC-DEBUG] FINAL TRANSCRIPT: ${trimmedFinal}`);
           this.emitter.emit("transcript", {
             text: trimmedFinal,
             isFinal: true,
             timestamp: Date.now(),
           });
         } else if (trimmedInterim) {
+          console.log(`[VOXFLOW-MIC-DEBUG] PARTIAL TRANSCRIPT: ${trimmedInterim}`);
           this.emitter.emit("transcript", {
             text: trimmedInterim,
             isFinal: false,
@@ -237,13 +243,13 @@ export class VoiceInputManager {
       };
 
       recognizer.onerror = (event: any) => {
+        console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition onerror:", event.error, (event as any).message || "");
         // Don't surface abort/no-speech as fatal errors
         if (event.error === "no-speech" || event.error === "aborted") {
           return;
         }
 
         this.consecutiveErrors++;
-        console.warn("[VOXFLOW MIC] Speech recognition notice:", event.error);
         if (event.error === "not-allowed") {
           this.emitter.emit("error", {
             type: "permission-denied",
@@ -255,13 +261,14 @@ export class VoiceInputManager {
 
       recognizer.onend = () => {
         this.isRecognizerActive = false;
+        console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition onend");
         if (this.isExplicitlyStopped || this.state !== "listening" || this.speechRecognizer !== recognizer) {
           return;
         }
 
         // Throttle restarts if network or service errors occurred
         if (this.consecutiveErrors > 4) {
-          console.warn("[VOXFLOW MIC] Pausing speech recognizer restarts after repeated errors.");
+          console.warn("[VOXFLOW-MIC-DEBUG] Pausing speech recognizer restarts after repeated errors.");
           return;
         }
 
@@ -278,21 +285,23 @@ export class VoiceInputManager {
           return;
         }
         try {
+          console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition.start() called");
           recognizer.start();
           this.isRecognizerActive = true;
         } catch (err: any) {
+          console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition.start() threw:", err?.name, err?.message);
           if (err?.name === "InvalidStateError" && retries > 0) {
             // Previous recognition instance is still ending; retry shortly
             setTimeout(() => safeStart(retries - 1), 150);
           } else {
-            console.warn("[VOXFLOW MIC] Speech recognition start notice:", err?.message || err);
+            console.warn("[VOXFLOW-MIC-DEBUG] Speech recognition start notice:", err?.message || err);
           }
         }
       };
 
       safeStart();
     } catch (e) {
-      console.warn("[VOXFLOW MIC] Failed to instantiate browser SpeechRecognition:", e);
+      console.warn("[VOXFLOW-MIC-DEBUG] Failed to instantiate browser SpeechRecognition:", e);
     }
   }
 }
