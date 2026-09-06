@@ -580,43 +580,7 @@ export function useVoiceSession() {
     console.log("[VOXFLOW-MIC-DEBUG] voice hook initialized");
     let isCancelled = false;
 
-    // Check browser microphone permission and initialize immediately if granted (or prompt)
-    const checkPermissionAndAutoStart = async () => {
-      // Yield slightly to ensure React hydration and initial render commit
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      if (isCancelled || !managerRef.current) return;
-
-      try {
-        if (typeof navigator !== "undefined" && navigator.permissions?.query) {
-          try {
-            const status = await navigator.permissions.query({ name: "microphone" as PermissionName });
-            if (status.state === "denied") {
-              console.log("[VOXFLOW-MIC-DEBUG] permission status = denied");
-              return;
-            }
-          } catch {
-            // Permissions query for microphone name not supported on all platforms; proceed
-          }
-        }
-
-        if (!isCancelled && managerRef.current && managerRef.current.getState() !== "listening") {
-          console.log("[VOXFLOW-MIC-DEBUG] startListening called (auto-start on mount)");
-          await managerRef.current.start({
-            deviceId:
-              audioConfig.selectedInputId !== "default"
-                ? audioConfig.selectedInputId
-                : undefined,
-            noiseSuppression: audioConfig.noiseSuppression,
-            echoCancellation: audioConfig.echoCancellation,
-            autoGainControl: audioConfig.autoGainControl,
-          });
-        }
-      } catch {
-        // Errors are routed to manager's error event listener
-      }
-    };
-
-    checkPermissionAndAutoStart();
+    // Initial page state remains idle; microphone is only started on explicit user gesture
 
     // Cleanup on unmount
     return () => {

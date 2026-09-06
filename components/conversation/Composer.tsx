@@ -48,7 +48,7 @@ export function Composer({
         return "Microphone notice. Tap mic to retry…";
       case "idle":
       default:
-        return "Speak to VOXFLOW or type a message…";
+        return "Tap the microphone to start speaking or type a message…";
     }
   };
 

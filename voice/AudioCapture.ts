@@ -35,18 +35,36 @@ export class AudioCapture {
       video: false,
     };
 
+    const isDev = process.env.NODE_ENV === "development";
+
     try {
-      console.log("[VOXFLOW-MIC-DEBUG] requesting getUserMedia");
-      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log("[VOXFLOW-MIC-DEBUG] getUserMedia SUCCESS");
-      console.log("[VOXFLOW-MIC-DEBUG] stream active =", this.stream.active);
-      console.log(
-        "[VOXFLOW-MIC-DEBUG] audio tracks =",
-        this.stream
-          .getAudioTracks()
-          .map((t) => `${t.label} (enabled=${t.enabled}, readyState=${t.readyState}, muted=${t.muted})`)
-          .join(", ")
-      );
+      if (isDev) {
+        console.log("[VOXFLOW-MIC-DEBUG] requesting getUserMedia");
+      }
+      try {
+        this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (firstErr: any) {
+        if (firstErr?.name === "OverconstrainedError") {
+          if (isDev) {
+            console.warn("[VOXFLOW-MIC-DEBUG] OverconstrainedError; retrying with basic audio constraints");
+          }
+          this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw firstErr;
+        }
+      }
+
+      if (isDev) {
+        console.log("[VOXFLOW-MIC-DEBUG] getUserMedia SUCCESS");
+        console.log("[VOXFLOW-MIC-DEBUG] stream active =", this.stream.active);
+        console.log(
+          "[VOXFLOW-MIC-DEBUG] audio tracks =",
+          this.stream
+            .getAudioTracks()
+            .map((t) => `${t.label} (enabled=${t.enabled}, readyState=${t.readyState}, muted=${t.muted})`)
+            .join(", ")
+        );
+      }
 
       // Create or reuse Web Audio Context for energy measurement
       if (!this.audioContext || this.audioContext.state === "closed") {
@@ -194,33 +212,67 @@ export class AudioCapture {
   }
 
   private normalizeError(error: unknown): VoiceInputError {
-    if (error instanceof DOMException) {
-      if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
-        return {
-          type: "permission-denied",
-          message: "Microphone access is required to talk to VOXFLOW.",
-          originalError: error,
-        };
-      }
-      if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
-        return {
-          type: "not-found",
-          message: "No microphone detected on your system.",
-          originalError: error,
-        };
-      }
-      if (error.name === "NotSupportedError") {
-        return {
-          type: "not-supported",
-          message: "Audio capture is not supported in this browser.",
-          originalError: error,
-        };
-      }
+    const errName = (error as any)?.name || (error instanceof DOMException ? error.name : "");
+
+    if (errName === "NotAllowedError" || errName === "PermissionDeniedError") {
+      return {
+        type: "permission-denied",
+        message: "Microphone access is blocked. Allow microphone access and try again.",
+        originalError: error,
+      };
+    }
+
+    if (errName === "SecurityError") {
+      return {
+        type: "security",
+        message: "Microphone access is not allowed by browser security policy.",
+        originalError: error,
+      };
+    }
+
+    if (errName === "NotFoundError" || errName === "DevicesNotFoundError") {
+      return {
+        type: "not-found",
+        message: "No microphone was found.",
+        originalError: error,
+      };
+    }
+
+    if (errName === "NotReadableError" || errName === "TrackStartError") {
+      return {
+        type: "not-readable",
+        message: "Your microphone is unavailable or being used by another application.",
+        originalError: error,
+      };
+    }
+
+    if (errName === "OverconstrainedError") {
+      return {
+        type: "overconstrained",
+        message: "Your microphone does not support the requested audio settings.",
+        originalError: error,
+      };
+    }
+
+    if (errName === "AbortError") {
+      return {
+        type: "aborted",
+        message: "Microphone startup was aborted. Please try again.",
+        originalError: error,
+      };
+    }
+
+    if (errName === "NotSupportedError") {
+      return {
+        type: "not-supported",
+        message: "Audio capture is not supported in this browser.",
+        originalError: error,
+      };
     }
 
     return {
       type: "unknown",
-      message: "An unexpected error occurred while starting the microphone.",
+      message: (error as any)?.message || "An unexpected error occurred while starting the microphone.",
       originalError: error,
     };
   }

@@ -4,6 +4,9 @@ export type VoiceInputErrorType =
   | "permission-denied"
   | "not-found"
   | "not-supported"
+  | "not-readable"
+  | "overconstrained"
+  | "security"
   | "aborted"
   | "unknown";
 
