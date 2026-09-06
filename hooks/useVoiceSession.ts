@@ -577,8 +577,48 @@ export function useVoiceSession() {
       });
     });
 
+    let isCancelled = false;
+
+    // Check browser microphone permission and initialize immediately if granted (or prompt)
+    const checkPermissionAndAutoStart = async () => {
+      // Yield slightly to ensure React hydration and initial render commit
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      if (isCancelled || !managerRef.current) return;
+
+      try {
+        if (typeof navigator !== "undefined" && navigator.permissions?.query) {
+          try {
+            const status = await navigator.permissions.query({ name: "microphone" as PermissionName });
+            if (status.state === "denied") {
+              console.log("[VOXFLOW MIC] permission status: denied");
+              return;
+            }
+          } catch {
+            // Permissions query for microphone name not supported on all platforms; proceed
+          }
+        }
+
+        if (!isCancelled && managerRef.current && managerRef.current.getState() !== "listening") {
+          await managerRef.current.start({
+            deviceId:
+              audioConfig.selectedInputId !== "default"
+                ? audioConfig.selectedInputId
+                : undefined,
+            noiseSuppression: audioConfig.noiseSuppression,
+            echoCancellation: audioConfig.echoCancellation,
+            autoGainControl: audioConfig.autoGainControl,
+          });
+        }
+      } catch {
+        // Errors are routed to manager's error event listener
+      }
+    };
+
+    checkPermissionAndAutoStart();
+
     // Cleanup on unmount
     return () => {
+      isCancelled = true;
       unbindStart();
       unbindLevel();
       unbindSpeechStart();
@@ -599,9 +639,13 @@ export function useVoiceSession() {
     };
   }, []);
 
+  const isStartingRef = useRef<boolean>(false);
+
   // Start microphone listening (unlocks audio context simultaneously)
   const startSession = useCallback(async () => {
     if (!managerRef.current) return;
+    if (isStartingRef.current || managerRef.current.getState() === "listening") return;
+    isStartingRef.current = true;
     try {
       setSession((prev) => ({ ...prev, errorMessage: null }));
 
@@ -621,6 +665,8 @@ export function useVoiceSession() {
       });
     } catch {
       // Error handled via event listener
+    } finally {
+      isStartingRef.current = false;
     }
   }, [audioConfig]);
 

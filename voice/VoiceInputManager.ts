@@ -17,6 +17,11 @@ export class VoiceInputManager {
   private emitter: VoiceEventEmitter;
   private speechRecognizer: any = null;
   private isRecognizerActive: boolean = false;
+  private restartTimeout: any = null;
+  private consecutiveErrors: number = 0;
+  private isExplicitlyStopped: boolean = false;
+  private initToken: number = 0;
+  private isInitializing: boolean = false;
 
   constructor(vadConfig?: VADConfig) {
     this.audioCapture = new AudioCapture();
@@ -40,6 +45,8 @@ export class VoiceInputManager {
       return;
     }
 
+    const token = ++this.initToken;
+    this.isInitializing = true;
     this.isExplicitlyStopped = false;
     this.consecutiveErrors = 0;
     if (this.restartTimeout) {
@@ -51,19 +58,37 @@ export class VoiceInputManager {
       // 1. Capture microphone audio stream & obtain AnalyserNode
       const analyser = await this.audioCapture.start(config);
 
+      // Check if session was stopped or superseded while awaiting getUserMedia
+      if (token !== this.initToken || this.isExplicitlyStopped) {
+        this.audioCapture.stop();
+        this.isInitializing = false;
+        return;
+      }
+
       // 2. Start Voice Activity Detector (RMS energy + silence boundaries)
       this.vad.start(analyser, {
         onAudioLevel: (level) => this.emitter.emit("audioLevel", level),
-        onSpeechStart: () => this.emitter.emit("speechStart"),
+        onSpeechStart: () => {
+          console.log("[VOXFLOW MIC] voice detected");
+          this.emitter.emit("speechStart");
+        },
         onSpeechEnd: () => this.emitter.emit("speechEnd"),
       });
+
+      console.log("[VOXFLOW MIC] VAD ready");
+      console.log("[VOXFLOW MIC] microphone ready");
 
       // 3. Initialize & start speech recognition if available in browser
       this.initSpeechRecognition();
 
       this.state = "listening";
+      this.isInitializing = false;
+      console.log("[VOXFLOW MIC] listening started");
       this.emitter.emit("startListening");
     } catch (err: any) {
+      this.isInitializing = false;
+      if (token !== this.initToken) return;
+
       this.state = "error";
       const voiceError: VoiceInputError =
         err?.type && err?.message
@@ -82,6 +107,8 @@ export class VoiceInputManager {
 
   public stop(): void {
     this.isExplicitlyStopped = true;
+    this.initToken++;
+    this.isInitializing = false;
     if (this.restartTimeout) {
       clearTimeout(this.restartTimeout);
       this.restartTimeout = null;
@@ -95,16 +122,22 @@ export class VoiceInputManager {
     this.vad.stop();
 
     // 2. Stop native speech recognizer
-    if (this.speechRecognizer && this.isRecognizerActive) {
-      try {
-        this.speechRecognizer.stop();
-      } catch {
-        // Ignore recognizer stop errors
-      }
+    if (this.speechRecognizer) {
+      const rec = this.speechRecognizer;
+      this.speechRecognizer = null;
       this.isRecognizerActive = false;
+      try {
+        rec.onend = null;
+        rec.onerror = null;
+        rec.onresult = null;
+        rec.onstart = null;
+        rec.stop();
+      } catch {
+        // Ignore stop errors
+      }
     }
 
-    // 3. Completely stop AudioCapture & release hardware tracks
+    // 3. Stop AudioCapture & release hardware tracks
     this.audioCapture.stop();
 
     // 4. Emit 0 level and stop event
@@ -128,19 +161,8 @@ export class VoiceInputManager {
   public dispose(): void {
     this.stop();
     this.emitter.removeAllListeners();
-    if (this.speechRecognizer) {
-      try {
-        this.speechRecognizer.abort();
-      } catch {
-        // Ignore abort errors
-      }
-      this.speechRecognizer = null;
-    }
+    this.audioCapture.dispose();
   }
-
-  private restartTimeout: any = null;
-  private consecutiveErrors: number = 0;
-  private isExplicitlyStopped: boolean = false;
 
   private initSpeechRecognition(): void {
     if (typeof window === "undefined") return;
@@ -155,13 +177,32 @@ export class VoiceInputManager {
       return;
     }
 
-    try {
-      this.speechRecognizer = new SpeechRecognition();
-      this.speechRecognizer.continuous = true;
-      this.speechRecognizer.interimResults = true;
-      this.speechRecognizer.maxAlternatives = 1;
+    // Clean up any lingering previous recognizer instance
+    if (this.speechRecognizer) {
+      const prev = this.speechRecognizer;
+      this.speechRecognizer = null;
+      this.isRecognizerActive = false;
+      try {
+        prev.onend = null;
+        prev.onerror = null;
+        prev.onresult = null;
+        prev.onstart = null;
+        prev.abort();
+      } catch {}
+    }
 
-      this.speechRecognizer.onresult = (event: any) => {
+    try {
+      const recognizer = new SpeechRecognition();
+      recognizer.continuous = true;
+      recognizer.interimResults = true;
+      recognizer.maxAlternatives = 1;
+      this.speechRecognizer = recognizer;
+
+      recognizer.onstart = () => {
+        this.isRecognizerActive = true;
+      };
+
+      recognizer.onresult = (event: any) => {
         this.consecutiveErrors = 0;
         let interimTranscript = "";
         let finalTranscript = "";
@@ -180,6 +221,7 @@ export class VoiceInputManager {
         const trimmedInterim = interimTranscript.trim();
 
         if (trimmedFinal) {
+          console.log(`[VOXFLOW MIC] final transcript: ${trimmedFinal}`);
           this.emitter.emit("transcript", {
             text: trimmedFinal,
             isFinal: true,
@@ -194,14 +236,14 @@ export class VoiceInputManager {
         }
       };
 
-      this.speechRecognizer.onerror = (event: any) => {
+      recognizer.onerror = (event: any) => {
         // Don't surface abort/no-speech as fatal errors
         if (event.error === "no-speech" || event.error === "aborted") {
           return;
         }
 
         this.consecutiveErrors++;
-        console.warn("[VoiceInputManager] Speech recognition notice:", event.error);
+        console.warn("[VOXFLOW MIC] Speech recognition notice:", event.error);
         if (event.error === "not-allowed") {
           this.emitter.emit("error", {
             type: "permission-denied",
@@ -211,33 +253,46 @@ export class VoiceInputManager {
         }
       };
 
-      this.speechRecognizer.onend = () => {
+      recognizer.onend = () => {
         this.isRecognizerActive = false;
-        if (this.isExplicitlyStopped || this.state !== "listening") return;
+        if (this.isExplicitlyStopped || this.state !== "listening" || this.speechRecognizer !== recognizer) {
+          return;
+        }
 
         // Throttle restarts if network or service errors occurred
         if (this.consecutiveErrors > 4) {
-          console.warn("[VoiceInputManager] Pausing speech recognizer restarts after repeated errors.");
+          console.warn("[VOXFLOW MIC] Pausing speech recognizer restarts after repeated errors.");
           return;
         }
 
         const delay = this.consecutiveErrors > 0 ? 1000 : 150;
         this.restartTimeout = setTimeout(() => {
-          if (this.state === "listening" && !this.isExplicitlyStopped && !this.isRecognizerActive) {
-            try {
-              this.speechRecognizer.start();
-              this.isRecognizerActive = true;
-            } catch {
-              // Ignore restart errors
-            }
+          if (this.state === "listening" && !this.isExplicitlyStopped && this.speechRecognizer === recognizer) {
+            safeStart();
           }
         }, delay);
       };
 
-      this.speechRecognizer.start();
-      this.isRecognizerActive = true;
+      const safeStart = (retries = 3) => {
+        if (this.isExplicitlyStopped || this.state !== "listening" || this.speechRecognizer !== recognizer) {
+          return;
+        }
+        try {
+          recognizer.start();
+          this.isRecognizerActive = true;
+        } catch (err: any) {
+          if (err?.name === "InvalidStateError" && retries > 0) {
+            // Previous recognition instance is still ending; retry shortly
+            setTimeout(() => safeStart(retries - 1), 150);
+          } else {
+            console.warn("[VOXFLOW MIC] Speech recognition start notice:", err?.message || err);
+          }
+        }
+      };
+
+      safeStart();
     } catch (e) {
-      console.warn("[VoiceInputManager] Failed to start browser SpeechRecognition:", e);
+      console.warn("[VOXFLOW MIC] Failed to instantiate browser SpeechRecognition:", e);
     }
   }
 }

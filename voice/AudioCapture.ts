@@ -5,6 +5,7 @@ export class AudioCapture {
   private audioContext: AudioContext | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private analyserNode: AnalyserNode | null = null;
+  private gestureListenerAttached: boolean = false;
 
   public static isSupported(): boolean {
     return (
@@ -21,8 +22,8 @@ export class AudioCapture {
       );
     }
 
-    // Clean up any lingering active stream first
-    this.stop();
+    // Clean up any lingering active stream/source node first
+    this.releaseStreamAndNodes();
 
     const constraints: MediaStreamConstraints = {
       audio: {
@@ -35,16 +36,31 @@ export class AudioCapture {
     };
 
     try {
+      console.log("[VOXFLOW MIC] permission requested");
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log("[VOXFLOW MIC] permission granted");
+      console.log("[VOXFLOW MIC] stream acquired");
 
-      // Create Web Audio Context for energy measurement
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      this.audioContext = new AudioCtx();
-
-      // Ensure context is running (handles autoplay policy resume)
-      if (this.audioContext.state === "suspended") {
-        await this.audioContext.resume();
+      // Create or reuse Web Audio Context for energy measurement
+      if (!this.audioContext || this.audioContext.state === "closed") {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        this.audioContext = new AudioCtx();
       }
+
+      console.log(`[VOXFLOW MIC] audio context state: ${this.audioContext.state}`);
+
+      // Ensure context is running (handles browser autoplay resume)
+      if (this.audioContext.state === "suspended") {
+        try {
+          await this.audioContext.resume();
+          console.log("[VOXFLOW MIC] audio context resumed");
+        } catch (err) {
+          console.warn("[VOXFLOW MIC] audio context resume deferred:", err);
+        }
+      }
+
+      // Attach user-gesture listener as safety in case browser autoplay policy suspended it
+      this.attachGestureUnlock();
 
       this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
       this.analyserNode = this.audioContext.createAnalyser();
@@ -54,6 +70,10 @@ export class AudioCapture {
       // Connect source to analyser only (NEVER to destination, avoiding feedback!)
       this.sourceNode.connect(this.analyserNode);
 
+      // Verify analyser is active and receiving samples before declaring ready
+      await this.waitForAnalyserReady(this.analyserNode);
+      console.log("[VOXFLOW MIC] analyser ready");
+
       return this.analyserNode;
     } catch (err) {
       this.stop();
@@ -61,7 +81,56 @@ export class AudioCapture {
     }
   }
 
-  public stop(): void {
+  private attachGestureUnlock(): void {
+    if (this.gestureListenerAttached || typeof window === "undefined") return;
+    this.gestureListenerAttached = true;
+
+    const unlock = () => {
+      if (this.audioContext && this.audioContext.state === "suspended") {
+        this.audioContext.resume().then(() => {
+          console.log("[VOXFLOW MIC] audio context resumed");
+        }).catch(() => {});
+      }
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      this.gestureListenerAttached = false;
+    };
+
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock, { passive: true });
+  }
+
+  private async waitForAnalyserReady(analyser: AnalyserNode, timeoutMs: number = 250): Promise<void> {
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const start = performance.now();
+
+    return new Promise((resolve) => {
+      const check = () => {
+        try {
+          analyser.getByteTimeDomainData(data);
+          let hasSamples = false;
+          for (let i = 0; i < data.length; i++) {
+            // Silence centers at 128 in byte time domain; unallocated is 0.
+            if (data[i] !== 0) {
+              hasSamples = true;
+              break;
+            }
+          }
+
+          if (hasSamples || (performance.now() - start >= timeoutMs)) {
+            resolve();
+          } else {
+            requestAnimationFrame(check);
+          }
+        } catch {
+          resolve();
+        }
+      };
+      check();
+    });
+  }
+
+  private releaseStreamAndNodes(): void {
     // 1. Release all MediaStream audio tracks
     if (this.stream) {
       this.stream.getTracks().forEach((track) => {
@@ -84,7 +153,15 @@ export class AudioCapture {
       this.sourceNode = null;
     }
 
-    // 3. Close AudioContext
+    this.analyserNode = null;
+  }
+
+  public stop(): void {
+    this.releaseStreamAndNodes();
+  }
+
+  public dispose(): void {
+    this.stop();
     if (this.audioContext && this.audioContext.state !== "closed") {
       try {
         this.audioContext.close();
@@ -93,8 +170,6 @@ export class AudioCapture {
       }
       this.audioContext = null;
     }
-
-    this.analyserNode = null;
   }
 
   public getMediaStream(): MediaStream | null {
