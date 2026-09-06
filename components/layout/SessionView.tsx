@@ -34,6 +34,14 @@ export function SessionView() {
   const hasMessages = messages.length > 0;
 
   const handleMicClick = (e?: React.MouseEvent) => {
+    console.log("[VOXFLOW-ANDROID] 1. MIC TAP:", {
+      timestamp: Date.now(),
+      userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+      platform: typeof navigator !== "undefined" ? (navigator as any).userAgentData?.platform || navigator.platform : "unknown",
+      userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+      userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
+      currentState: session.state,
+    });
     console.log("[VOXFLOW-MIC] A. MIC BUTTON CLICK:", {
       timestamp: Date.now(),
       eventType: e?.type || "click",

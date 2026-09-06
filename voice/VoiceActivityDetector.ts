@@ -47,6 +47,7 @@ export class VoiceActivityDetector {
     this.speechStartTime = 0;
     this.lastAboveThresholdTime = 0;
     this.lastRmsLogTime = performance.now();
+    console.log("[VOXFLOW-ANDROID] 8. VAD: analyser connected & VAD started");
     console.log("[VOXFLOW-MIC-DEBUG] VAD started");
 
     const loop = () => {
@@ -86,6 +87,12 @@ export class VoiceActivityDetector {
             this.speechStartTime = now;
           } else if (now - this.speechStartTime >= this.minSpeechDurationMs) {
             this.isSpeaking = true;
+            console.log("[VOXFLOW-ANDROID] 8. VAD: RMS level when speech occurs", {
+              rms: rms.toFixed(5),
+              normalizedLevel: normalizedLevel.toFixed(4),
+              effectiveThreshold: effectiveThreshold.toFixed(4),
+              timestamp: Date.now(),
+            });
             console.log("[VOXFLOW-MIC] G. VAD voice detected (VOICE START)", {
               rms: rms.toFixed(4),
               normalizedLevel: normalizedLevel.toFixed(4),

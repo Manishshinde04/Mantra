@@ -38,6 +38,10 @@ export class AudioCapture {
     const isDev = process.env.NODE_ENV === "development";
 
     try {
+      console.log("[VOXFLOW-ANDROID] 5. GET USER MEDIA: getUserMedia called", {
+        constraints,
+        userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+      });
       console.log("[VOXFLOW-MIC] C. getUserMedia() called", {
         constraints,
         userActivationIsActive: (navigator as any)?.userActivation?.isActive,
@@ -45,8 +49,13 @@ export class AudioCapture {
 
       try {
         this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log("[VOXFLOW-ANDROID] 5. GET USER MEDIA: getUserMedia success");
         console.log("[VOXFLOW-MIC] C. getUserMedia() SUCCESS");
       } catch (firstErr: any) {
+        console.warn("[VOXFLOW-ANDROID] 5. GET USER MEDIA: primary attempt threw:", {
+          errorName: firstErr?.name,
+          errorMessage: firstErr?.message,
+        });
         console.warn("[VOXFLOW-MIC] C. getUserMedia() primary attempt threw:", {
           name: firstErr?.name,
           message: firstErr?.message,
@@ -54,13 +63,24 @@ export class AudioCapture {
         if (firstErr?.name === "OverconstrainedError") {
           console.warn("[VOXFLOW-MIC] C. getUserMedia() retrying with basic { audio: true }");
           this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          console.log("[VOXFLOW-ANDROID] 5. GET USER MEDIA: fallback success");
           console.log("[VOXFLOW-MIC] C. getUserMedia() fallback SUCCESS");
         } else {
+          console.error("[VOXFLOW-ANDROID] 5. GET USER MEDIA: getUserMedia failure", {
+            errorName: firstErr?.name,
+            errorMessage: firstErr?.message,
+          });
           throw firstErr;
         }
       }
 
       const track = this.stream.getAudioTracks()[0];
+      console.log("[VOXFLOW-ANDROID] 6. MEDIA TRACK:", {
+        readyState: track?.readyState,
+        enabled: track?.enabled,
+        muted: track?.muted,
+        settings: track?.getSettings ? track.getSettings() : {},
+      });
       console.log("[VOXFLOW-MIC] D. MEDIA STREAM:", {
         streamActive: this.stream.active,
         audioTrackExists: !!track,
@@ -77,6 +97,10 @@ export class AudioCapture {
         this.audioContext = new AudioCtx();
       }
 
+      console.log("[VOXFLOW-ANDROID] 7. AUDIO CONTEXT: AudioContext created", {
+        wasExisting,
+        stateBeforeResume: this.audioContext!.state,
+      });
       console.log("[VOXFLOW-MIC] E. AUDIO CONTEXT:", {
         created: !wasExisting,
         stateBeforeResume: this.audioContext!.state,
@@ -91,6 +115,7 @@ export class AudioCapture {
           console.warn("[VOXFLOW-MIC] E. AUDIO CONTEXT resume error:", err?.name, err?.message);
         }
       }
+      console.log("[VOXFLOW-ANDROID] 7. AUDIO CONTEXT: stateAfterResume", this.audioContext!.state);
       console.log("[VOXFLOW-MIC] E. AUDIO CONTEXT stateAfterResume:", this.audioContext!.state);
 
       // Attach user-gesture listener as safety in case browser autoplay policy suspended it

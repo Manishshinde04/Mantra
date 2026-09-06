@@ -69,6 +69,14 @@ export function Composer({
         <button
           type="button"
           onClick={(e) => {
+            console.log("[VOXFLOW-ANDROID] 1. MIC TAP (Composer):", {
+              timestamp: Date.now(),
+              userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+              platform: typeof navigator !== "undefined" ? (navigator as any).userAgentData?.platform || navigator.platform : "unknown",
+              userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+              userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
+              currentState: state,
+            });
             console.log("[VOXFLOW-MIC] A. MIC BUTTON CLICK (Composer):", {
               timestamp: Date.now(),
               eventType: e.type,

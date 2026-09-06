@@ -79,7 +79,7 @@ export class VoiceInputManager {
       userActivationIsActive: (navigator as any)?.userActivation?.isActive,
       userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
     });
-    this.startSpeechRecognitionSafely();
+    this.startSpeechRecognitionSafely(tStart);
 
     // 3. BACKGROUND: Initialize AudioCapture and VAD concurrently without blocking SpeechRecognition
     void this.initializeAudioCaptureInBackground(config, token);
@@ -255,7 +255,7 @@ export class VoiceInputManager {
    * Safely instantiates and starts a fresh SpeechRecognition session.
    * Ensures old recognizer instances cannot leak events or cause duplicate starts.
    */
-  private startSpeechRecognitionSafely(): void {
+  private startSpeechRecognitionSafely(tStart: number = performance.now()): void {
     if (typeof window === "undefined") return;
 
     if (this.isExplicitlyStopped || this.state !== "listening") {
@@ -266,9 +266,18 @@ export class VoiceInputManager {
       return;
     }
 
+    const hasStandardSR = Boolean((window as any).SpeechRecognition);
+    const hasWebkitSR = Boolean((window as any).webkitSpeechRecognition);
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
       (window as any).webkitSpeechRecognition;
+
+    console.log("[VOXFLOW-ANDROID] 2. SPEECH RECOGNITION AVAILABILITY:", {
+      speechRecognitionExists: hasStandardSR,
+      webkitSpeechRecognitionExists: hasWebkitSR,
+      constructorSelected: hasWebkitSR && !hasStandardSR ? "webkitSpeechRecognition" : hasStandardSR ? "SpeechRecognition" : "none",
+      recognizerCreatedSuccessfully: Boolean(SpeechRecognition),
+    });
 
     if (!SpeechRecognition) {
       return;
@@ -314,6 +323,7 @@ export class VoiceInputManager {
       this.speechRecognizer = recognizer;
 
       recognizer.onstart = () => {
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onstart", { timestamp: Date.now(), delayMs: performance.now() - tStart });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onstart");
         if (gen !== this.recognitionGeneration || this.isExplicitlyStopped || this.state !== "listening") {
           try { recognizer.abort(); } catch {}
@@ -326,14 +336,17 @@ export class VoiceInputManager {
       };
 
       recognizer.onaudiostart = () => {
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onaudiostart", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onaudiostart");
       };
 
       recognizer.onsoundstart = () => {
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onsoundstart", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onsoundstart");
       };
 
       recognizer.onspeechstart = () => {
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onspeechstart", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onspeechstart");
       };
 
@@ -358,6 +371,11 @@ export class VoiceInputManager {
         const trimmedFinal = finalTranscript.trim();
         const trimmedInterim = interimTranscript.trim();
 
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onresult", {
+          interim: trimmedInterim || null,
+          final: trimmedFinal || null,
+          timestamp: Date.now(),
+        });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onresult:", {
           interim: trimmedInterim || null,
           final: trimmedFinal || null,
@@ -379,19 +397,28 @@ export class VoiceInputManager {
       };
 
       recognizer.onspeechend = () => {
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onspeechend", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onspeechend");
       };
 
       recognizer.onsoundend = () => {
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onsoundend", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onsoundend");
       };
 
       recognizer.onaudioend = () => {
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onaudioend", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onaudioend");
       };
 
       recognizer.onerror = (event: any) => {
         const errCode = event.error;
+        console.error("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onerror", {
+          error: errCode,
+          message: (event as any).message || "",
+          timestamp: Date.now(),
+          currentState: this.state,
+        });
         console.error("[VOXFLOW-MIC] F. SPEECH RECOGNITION onerror:", {
           error: errCode,
           message: (event as any).message || "",
@@ -417,6 +444,12 @@ export class VoiceInputManager {
       };
 
       recognizer.onend = () => {
+        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onend", {
+          timestamp: Date.now(),
+          currentState: this.state,
+          gen,
+          activeGen: this.recognitionGeneration,
+        });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onend", {
           gen,
           activeGen: this.recognitionGeneration,
@@ -437,6 +470,12 @@ export class VoiceInputManager {
         this.scheduleSpeechRecognitionRestart();
       };
 
+      console.log("[VOXFLOW-ANDROID] 3. IMMEDIATE START:", {
+        timestamp: Date.now(),
+        delayFromTapMs: performance.now() - tStart,
+        userActivationIsActive: (navigator as any)?.userActivation?.isActive,
+        userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
+      });
       console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION start() called", {
         userActivationIsActive: (navigator as any)?.userActivation?.isActive,
         userActivationHasBeenActive: (navigator as any)?.userActivation?.hasBeenActive,
@@ -445,6 +484,10 @@ export class VoiceInputManager {
     } catch (err: any) {
       this.isRecognitionStarting = false;
       this.isRecognitionRunning = false;
+      console.error("[VOXFLOW-ANDROID] 3. IMMEDIATE START SYNCHRONOUS EXCEPTION:", {
+        name: err?.name,
+        message: err?.message,
+      });
       console.error("[VOXFLOW-MIC] F. SPEECH RECOGNITION start() threw:", {
         name: err?.name,
         message: err?.message,
