@@ -15,10 +15,16 @@ export class VoiceInputManager {
   private audioCapture: AudioCapture;
   private vad: VoiceActivityDetector;
   private emitter: VoiceEventEmitter;
+
+  // SpeechRecognition Lifecycle Management
   private speechRecognizer: any = null;
-  private isRecognizerActive: boolean = false;
+  private isRecognitionRunning: boolean = false;
+  private isRecognitionStarting: boolean = false;
   private restartTimeout: any = null;
-  private consecutiveErrors: number = 0;
+  private consecutiveRestarts: number = 0;
+  private recognitionGeneration: number = 0;
+  private configuredLanguage?: string;
+
   private isExplicitlyStopped: boolean = false;
   private initToken: number = 0;
   private isInitializing: boolean = false;
@@ -40,6 +46,12 @@ export class VoiceInputManager {
     return this.emitter.on(event, listener);
   }
 
+  private isDevLogs(): boolean {
+    if (process.env.NODE_ENV === "development") return true;
+    if (typeof window !== "undefined" && Boolean((window as any).__VOXFLOW_DEBUG__)) return true;
+    return false;
+  }
+
   public async start(config: AudioCaptureConfig = {}): Promise<void> {
     if (this.state === "listening") {
       return;
@@ -48,7 +60,9 @@ export class VoiceInputManager {
     const token = ++this.initToken;
     this.isInitializing = true;
     this.isExplicitlyStopped = false;
-    this.consecutiveErrors = 0;
+    this.consecutiveRestarts = 0;
+    this.configuredLanguage = config.language;
+
     if (this.restartTimeout) {
       clearTimeout(this.restartTimeout);
       this.restartTimeout = null;
@@ -81,11 +95,13 @@ export class VoiceInputManager {
       // 3. Set state to listening BEFORE initializing & starting speech recognition
       this.state = "listening";
       this.isInitializing = false;
-      console.log("[VOXFLOW-MIC-DEBUG] state set to listening");
+      if (this.isDevLogs()) {
+        console.log("[VOXFLOW-MIC-DEBUG] state set to listening");
+      }
       console.log("[VOXFLOW MIC] listening started");
 
-      // 4. Initialize & start speech recognition (safeStart now sees this.state === "listening")
-      this.initSpeechRecognition();
+      // 4. Safely start speech recognition with self-healing lifecycle
+      this.startSpeechRecognitionSafely();
 
       this.emitter.emit("startListening");
     } catch (err: any) {
@@ -111,7 +127,13 @@ export class VoiceInputManager {
   public stop(): void {
     this.isExplicitlyStopped = true;
     this.initToken++;
+    this.recognitionGeneration++;
     this.isInitializing = false;
+    this.isRecognitionStarting = false;
+    this.isRecognitionRunning = false;
+    this.consecutiveRestarts = 0;
+
+    // Clear any pending restart timer immediately
     if (this.restartTimeout) {
       clearTimeout(this.restartTimeout);
       this.restartTimeout = null;
@@ -124,19 +146,18 @@ export class VoiceInputManager {
     // 1. Stop VAD loop
     this.vad.stop();
 
-    // 2. Stop native speech recognizer
+    // 2. Stop native speech recognizer & detach all handlers
     if (this.speechRecognizer) {
       const rec = this.speechRecognizer;
       this.speechRecognizer = null;
-      this.isRecognizerActive = false;
       try {
         rec.onend = null;
         rec.onerror = null;
         rec.onresult = null;
         rec.onstart = null;
-        rec.stop();
+        rec.abort();
       } catch {
-        // Ignore stop errors
+        // Ignore stop/abort errors
       }
     }
 
@@ -167,24 +188,78 @@ export class VoiceInputManager {
     this.audioCapture.dispose();
   }
 
-  private initSpeechRecognition(): void {
+  /**
+   * Schedules a SpeechRecognition restart with bounded exponential backoff.
+   * Centralized single owner prevents duplicate starts and race conditions.
+   */
+  private scheduleSpeechRecognitionRestart(): void {
+    if (this.isExplicitlyStopped || this.state !== "listening") {
+      return;
+    }
+
+    // Clear any existing restart timer
+    if (this.restartTimeout) {
+      clearTimeout(this.restartTimeout);
+      this.restartTimeout = null;
+    }
+
+    // Guard against duplicate starts while recognition is already running/starting
+    if (this.isRecognitionRunning || this.isRecognitionStarting) {
+      return;
+    }
+
+    // Bounded backoff: 250ms -> 500ms -> 1000ms
+    let delay = 250;
+    if (this.consecutiveRestarts === 1) {
+      delay = 500;
+    } else if (this.consecutiveRestarts >= 2) {
+      delay = 1000;
+    }
+    this.consecutiveRestarts++;
+
+    if (this.isDevLogs()) {
+      console.log(`[VOXFLOW-STT] scheduling restart (delay=${delay}ms, attempt=${this.consecutiveRestarts})`);
+    }
+
+    this.restartTimeout = setTimeout(() => {
+      this.restartTimeout = null;
+      if (this.isExplicitlyStopped || this.state !== "listening") {
+        return;
+      }
+      if (this.isDevLogs()) {
+        console.log("[VOXFLOW-STT] restart attempt");
+      }
+      this.startSpeechRecognitionSafely();
+    }, delay);
+  }
+
+  /**
+   * Safely instantiates and starts a fresh SpeechRecognition session.
+   * Ensures old recognizer instances cannot leak events or cause duplicate starts.
+   */
+  private startSpeechRecognitionSafely(): void {
     if (typeof window === "undefined") return;
+
+    if (this.isExplicitlyStopped || this.state !== "listening") {
+      return;
+    }
+
+    if (this.isRecognitionStarting || this.isRecognitionRunning) {
+      return;
+    }
 
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
       (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      // SpeechRecognition not supported natively in this browser;
-      // Audio capture & VAD still function fully for future backend/WebSocket STT.
       return;
     }
 
-    // Clean up any lingering previous recognizer instance
+    // Clean up previous instance cleanly
     if (this.speechRecognizer) {
       const prev = this.speechRecognizer;
       this.speechRecognizer = null;
-      this.isRecognizerActive = false;
       try {
         prev.onend = null;
         prev.onerror = null;
@@ -194,21 +269,47 @@ export class VoiceInputManager {
       } catch {}
     }
 
+    const gen = ++this.recognitionGeneration;
+    this.isRecognitionStarting = true;
+
     try {
       const recognizer = new SpeechRecognition();
       recognizer.continuous = true;
       recognizer.interimResults = true;
       recognizer.maxAlternatives = 1;
+
+      // Determine explicit language: prefer configured language, then browser locale, fallback to "en-US"
+      const preferredLang =
+        this.configuredLanguage ||
+        (typeof navigator !== "undefined" && navigator.language ? navigator.language : "") ||
+        "en-US";
+      recognizer.lang = preferredLang;
+
       this.speechRecognizer = recognizer;
-      console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition created");
 
       recognizer.onstart = () => {
-        this.isRecognizerActive = true;
-        console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition onstart");
+        if (gen !== this.recognitionGeneration || this.isExplicitlyStopped || this.state !== "listening") {
+          try { recognizer.abort(); } catch {}
+          return;
+        }
+        const wasRestart = this.consecutiveRestarts > 0;
+        this.isRecognitionStarting = false;
+        this.isRecognitionRunning = true;
+        this.consecutiveRestarts = 0;
+
+        if (this.isDevLogs()) {
+          console.log("[VOXFLOW-STT] onstart");
+          if (wasRestart) {
+            console.log("[VOXFLOW-STT] restart successful");
+          }
+        }
       };
 
       recognizer.onresult = (event: any) => {
-        this.consecutiveErrors = 0;
+        if (gen !== this.recognitionGeneration || this.isExplicitlyStopped || this.state !== "listening") {
+          return;
+        }
+        this.consecutiveRestarts = 0;
         let interimTranscript = "";
         let finalTranscript = "";
 
@@ -226,14 +327,18 @@ export class VoiceInputManager {
         const trimmedInterim = interimTranscript.trim();
 
         if (trimmedFinal) {
-          console.log(`[VOXFLOW-MIC-DEBUG] FINAL TRANSCRIPT: ${trimmedFinal}`);
+          if (this.isDevLogs()) {
+            console.log(`[VOXFLOW-MIC-DEBUG] FINAL TRANSCRIPT: ${trimmedFinal}`);
+          }
           this.emitter.emit("transcript", {
             text: trimmedFinal,
             isFinal: true,
             timestamp: Date.now(),
           });
         } else if (trimmedInterim) {
-          console.log(`[VOXFLOW-MIC-DEBUG] PARTIAL TRANSCRIPT: ${trimmedInterim}`);
+          if (this.isDevLogs()) {
+            console.log(`[VOXFLOW-MIC-DEBUG] PARTIAL TRANSCRIPT: ${trimmedInterim}`);
+          }
           this.emitter.emit("transcript", {
             text: trimmedInterim,
             isFinal: false,
@@ -243,14 +348,29 @@ export class VoiceInputManager {
       };
 
       recognizer.onerror = (event: any) => {
-        console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition onerror:", event.error, (event as any).message || "");
-        // Don't surface abort/no-speech as fatal errors
-        if (event.error === "no-speech" || event.error === "aborted") {
+        if (gen !== this.recognitionGeneration) return;
+        const errCode = event.error;
+
+        if (errCode === "no-speech") {
+          if (this.isDevLogs()) {
+            console.log("[VOXFLOW-STT] onerror: no-speech");
+          }
+          // Do not emit fatal error. Chrome will fire onend next, which schedules restart.
           return;
         }
 
-        this.consecutiveErrors++;
-        if (event.error === "not-allowed") {
+        if (errCode === "aborted") {
+          if (this.isDevLogs()) {
+            console.log("[VOXFLOW-STT] onerror: aborted");
+          }
+          return;
+        }
+
+        if (this.isDevLogs()) {
+          console.log(`[VOXFLOW-STT] onerror: ${errCode}`);
+        }
+
+        if (errCode === "not-allowed") {
           this.emitter.emit("error", {
             type: "permission-denied",
             message: "Microphone permission is required to transcribe speech.",
@@ -260,48 +380,36 @@ export class VoiceInputManager {
       };
 
       recognizer.onend = () => {
-        this.isRecognizerActive = false;
-        console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition onend");
-        if (this.isExplicitlyStopped || this.state !== "listening" || this.speechRecognizer !== recognizer) {
+        if (gen !== this.recognitionGeneration) return;
+        this.isRecognitionRunning = false;
+        this.isRecognitionStarting = false;
+
+        if (this.isDevLogs()) {
+          console.log("[VOXFLOW-STT] onend");
+        }
+
+        // If user intentionally stopped or session is no longer listening, do nothing
+        if (this.isExplicitlyStopped || this.state !== "listening") {
           return;
         }
 
-        // Throttle restarts if network or service errors occurred
-        if (this.consecutiveErrors > 4) {
-          console.warn("[VOXFLOW-MIC-DEBUG] Pausing speech recognizer restarts after repeated errors.");
-          return;
-        }
-
-        const delay = this.consecutiveErrors > 0 ? 1000 : 150;
-        this.restartTimeout = setTimeout(() => {
-          if (this.state === "listening" && !this.isExplicitlyStopped && this.speechRecognizer === recognizer) {
-            safeStart();
-          }
-        }, delay);
+        // Otherwise, automatically schedule self-healing restart
+        this.scheduleSpeechRecognitionRestart();
       };
 
-      const safeStart = (retries = 3) => {
-        if (this.isExplicitlyStopped || this.state !== "listening" || this.speechRecognizer !== recognizer) {
-          return;
-        }
-        try {
-          console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition.start() called");
-          recognizer.start();
-          this.isRecognizerActive = true;
-        } catch (err: any) {
-          console.log("[VOXFLOW-MIC-DEBUG] SpeechRecognition.start() threw:", err?.name, err?.message);
-          if (err?.name === "InvalidStateError" && retries > 0) {
-            // Previous recognition instance is still ending; retry shortly
-            setTimeout(() => safeStart(retries - 1), 150);
-          } else {
-            console.warn("[VOXFLOW-MIC-DEBUG] Speech recognition start notice:", err?.message || err);
-          }
-        }
-      };
-
-      safeStart();
-    } catch (e) {
-      console.warn("[VOXFLOW-MIC-DEBUG] Failed to instantiate browser SpeechRecognition:", e);
+      if (this.isDevLogs()) {
+        console.log("[VOXFLOW-STT] start requested");
+      }
+      recognizer.start();
+    } catch (err: any) {
+      this.isRecognitionStarting = false;
+      this.isRecognitionRunning = false;
+      if (this.isDevLogs()) {
+        console.warn("[VOXFLOW-STT] start error:", err?.name, err?.message);
+      }
+      if (!this.isExplicitlyStopped && this.state === "listening") {
+        this.scheduleSpeechRecognitionRestart();
+      }
     }
   }
 }

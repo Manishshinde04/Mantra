@@ -71,8 +71,8 @@ export class VoiceActivityDetector {
 
       const now = performance.now();
 
-      // Sample RMS approximately every 500ms
-      if (now - this.lastRmsLogTime >= 500) {
+      // Sample RMS approximately every 500ms in development only
+      if (process.env.NODE_ENV === "development" && now - this.lastRmsLogTime >= 500) {
         this.lastRmsLogTime = now;
         console.log(`[VOXFLOW-MIC-DEBUG] RMS = ${rms.toFixed(5)} (normalized = ${normalizedLevel.toFixed(4)})`);
       }

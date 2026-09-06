@@ -18,6 +18,7 @@ export interface AudioCaptureConfig {
   noiseSuppression?: boolean;
   echoCancellation?: boolean;
   autoGainControl?: boolean;
+  language?: string;
 }
 
 export interface VADConfig {
