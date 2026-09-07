@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
     }
 
     const userMessage =
-      error?.message || "VOXFLOW couldn't synthesize audio. Text response remains available.";
+      error?.message || "MANTRA couldn't synthesize audio. Text response remains available.";
     return new Response(
       JSON.stringify({ error: userMessage }),
       {

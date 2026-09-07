@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "VOXFLOW — Realtime Voice Agent",
+  title: "MANTRA — Realtime Voice Agent",
   description:
     "A minimal, low-latency, production-quality realtime voice intelligence interface.",
 };

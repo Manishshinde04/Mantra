@@ -7,7 +7,7 @@ export async function GET(req: NextRequest) {
   const isDev = process.env.NODE_ENV !== "production";
   
   const diagnostics = {
-    service: "VOXFLOW Realtime Voice Agent",
+    service: "MANTRA Realtime Voice Agent",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development",
     gemini: {

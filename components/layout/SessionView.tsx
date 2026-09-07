@@ -121,7 +121,7 @@ export function SessionView() {
                   ? "Stop listening"
                   : session.state === "speaking"
                   ? "Interrupt speaking"
-                  : "Start speaking to VOXFLOW"
+                  : "Start speaking to MANTRA"
               }
               className={cn(
                 "group relative flex items-center justify-center w-14 h-14 rounded-full transition-all duration-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/40 shadow-lg",

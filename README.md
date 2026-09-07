@@ -1,6 +1,6 @@
-# VOXFLOW — Realtime Conversational Voice Agent
+# MANTRA — Realtime Conversational Voice Agent
 
-VOXFLOW is a minimal, low-latency, production-quality conversational voice agent. It pairs Google Gemini intelligence with Rime AI low-latency voice synthesis, real-time speech activity detection, seamless natural barge-in interruption, and an extensible tool engine.
+MANTRA is a minimal, low-latency, production-quality conversational voice agent. It pairs Google Gemini intelligence with Rime AI low-latency voice synthesis, real-time speech activity detection, seamless natural barge-in interruption, and an extensible tool engine.
 
 ---
 
@@ -96,7 +96,7 @@ VOXFLOW is a minimal, low-latency, production-quality conversational voice agent
 ---
 
 ## Extensible Tool Engine
-VOXFLOW includes a provider-agnostic tool execution subsystem:
+MANTRA includes a provider-agnostic tool execution subsystem:
 - **CalculatorTool**: Evaluates mathematical and arithmetic expressions with exact precision (`tools/CalculatorTool.ts`).
 - **WebSearchTool**: Real-time live web query execution via DuckDuckGo Instant Answer API (`tools/WebSearchTool.ts`).
 - **ToolRegistry**: Manages tool registration, inspection, and execution with AbortController signal support (`tools/ToolRegistry.ts`).
@@ -157,6 +157,6 @@ npm run build
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to test VOXFLOW.
+Open [http://localhost:3000](http://localhost:3000) to test MANTRA.
 
 Internal developer diagnostics route: `GET /dev/diagnostics`.

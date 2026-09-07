@@ -273,7 +273,7 @@ export default function AndroidTestPage() {
   return (
     <div className="min-h-screen bg-black text-white p-4 font-sans max-w-xl mx-auto">
       <div className="border-b border-zinc-800 pb-3 mb-4">
-        <h1 className="text-xl font-bold text-amber-400">VOXFLOW — Android Diagnostic Lab</h1>
+        <h1 className="text-xl font-bold text-amber-400">MANTRA — Android Diagnostic Lab</h1>
         <p className="text-xs text-zinc-400 mt-1">
           Android Chrome Root Cause Isolation (Live Diagnostic)
         </p>
@@ -318,7 +318,7 @@ export default function AndroidTestPage() {
           disabled={activeTest !== null}
           className="w-full py-3.5 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 font-bold text-sm shadow-lg disabled:opacity-50 text-left flex justify-between items-center"
         >
-          <span>TEST C: Complete VOXFLOW Pipeline</span>
+          <span>TEST C: Complete MANTRA Pipeline</span>
           <span className="text-xs bg-purple-800 px-2 py-1 rounded">Full Stack</span>
         </button>
 

@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
         } catch (err: any) {
           const status = err?.status || err?.code || 500;
           const rawMsg = (err?.message || "").toLowerCase();
-          let userMessage = "VOXFLOW couldn't process that request. Please try again.";
+          let userMessage = "MANTRA couldn't process that request. Please try again.";
           if (status === 429 || rawMsg.includes("resource_exhausted") || rawMsg.includes("quota") || rawMsg.includes("too many requests")) {
             userMessage = "AI service is temporarily busy. Please try again shortly.";
           } else if (status === 503 || rawMsg.includes("unavailable") || rawMsg.includes("high demand")) {
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
       ? error.status
       : 500;
     const userMessage =
-      error?.message || "VOXFLOW couldn't process that request. Please try again.";
+      error?.message || "MANTRA couldn't process that request. Please try again.";
     const code = error?.code || "ERROR";
 
     console.warn(`[CHAT API] request rejected status=${status} code=${code} msg="${userMessage}"`);

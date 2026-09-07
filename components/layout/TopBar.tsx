@@ -13,7 +13,7 @@ export function TopBar({ onOpenSettings }: TopBarProps) {
       {/* Refined Apple-style Brand Header */}
       <div className="flex flex-col">
         <span className="text-[15px] font-semibold tracking-wider text-zinc-100 uppercase">
-          VOXFLOW
+          MANTRA
         </span>
         <span className="text-[11px] text-zinc-500 font-normal tracking-normal">
           Realtime Voice Agent

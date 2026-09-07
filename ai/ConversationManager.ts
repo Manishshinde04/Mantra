@@ -119,7 +119,7 @@ export class ConversationManager {
       }
 
       const cleanError =
-        err instanceof Error ? err : new Error("VOXFLOW couldn't process that request.");
+        err instanceof Error ? err : new Error("MANTRA couldn't process that request.");
       console.error(`[VOXFLOW-E2E] [GEMINI] stream error: requestId=${requestId}, error=${cleanError.message}`);
       callbacks.onError(cleanError, generationId);
       throw cleanError;

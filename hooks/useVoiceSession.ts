@@ -463,7 +463,7 @@ export function useVoiceSession() {
               const cleanMsg =
                 err.status === 429
                   ? "AI service is temporarily busy. Please try again shortly."
-                  : err.message || "VOXFLOW couldn't process that request.";
+                  : err.message || "MANTRA couldn't process that request.";
 
               console.log("[VOXFLOW-E2E] [SESSION] state -> error:", cleanMsg);
               setSession((prev) => ({

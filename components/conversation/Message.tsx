@@ -45,7 +45,7 @@ export function Message({ message, isSpeaking = false, outputLevel = 0 }: Messag
             isUser ? "text-zinc-400" : "text-zinc-200"
           )}
         >
-          {isUser ? "YOU" : "VOXFLOW"}
+          {isUser ? "YOU" : "MANTRA"}
         </span>
 
         {formattedTime && (
@@ -126,7 +126,7 @@ export function Message({ message, isSpeaking = false, outputLevel = 0 }: Messag
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400/90" />
             <span className="font-medium text-zinc-300">Interrupted</span>
             <span className="text-zinc-600">·</span>
-            <span className="text-zinc-400">You interrupted VOXFLOW</span>
+            <span className="text-zinc-400">You interrupted MANTRA</span>
           </div>
         </div>
       )}

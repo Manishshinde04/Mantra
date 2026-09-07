@@ -102,7 +102,7 @@ export class GeminiProvider implements AIProvider {
       if (status === 401 || status === 403 || rawMsg.includes("api_key_invalid") || rawMsg.includes("invalid api key")) {
         apiErr.status = 401;
         apiErr.code = "AUTH_ERROR";
-        apiErr.message = "VOXFLOW could not connect to the AI service. Please check your API key.";
+        apiErr.message = "MANTRA could not connect to the AI service. Please check your API key.";
         throw apiErr;
       }
 
@@ -115,7 +115,7 @@ export class GeminiProvider implements AIProvider {
 
       apiErr.status = 500;
       apiErr.code = "INTERNAL_ERROR";
-      apiErr.message = "VOXFLOW couldn't process that request. Please try again.";
+      apiErr.message = "MANTRA couldn't process that request. Please try again.";
       throw apiErr;
   }
 
