@@ -57,6 +57,7 @@ export class VoiceInputManager {
       return;
     }
 
+    const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
     const tStart = performance.now();
     const token = ++this.initToken;
     this.isInitializing = true;
@@ -73,6 +74,13 @@ export class VoiceInputManager {
     this.state = "listening";
     this.emitter.emit("startListening");
 
+    // Android diagnostic logging
+    console.log("[VOXFLOW-ANDROID] platform:", isAndroid ? "Android" : "Desktop");
+    console.log("[VOXFLOW-ANDROID] recognition.start()");
+    console.log("[VOXFLOW-ANDROID] getUserMedia called?", isAndroid ? "false" : "true (desktop background)");
+    console.log("[VOXFLOW-ANDROID] AudioContext created?", isAndroid ? "false" : "true (desktop background)");
+    console.log("[VOXFLOW-ANDROID] VAD started?", isAndroid ? "false" : "true (desktop background)");
+
     // 2. SYNCHRONOUS: Start speech recognition right now within the user gesture call stack
     console.log("[VOXFLOW-MIC] start() synchronously calling startSpeechRecognitionSafely()", {
       perfNow: tStart,
@@ -81,8 +89,13 @@ export class VoiceInputManager {
     });
     this.startSpeechRecognitionSafely(tStart);
 
-    // 3. BACKGROUND: Initialize AudioCapture and VAD concurrently without blocking SpeechRecognition
-    void this.initializeAudioCaptureInBackground(config, token);
+    // 3. BACKGROUND: Desktop initializes AudioCapture and VAD concurrently.
+    // Android BYPASSES getUserMedia completely so SpeechRecognition owns the microphone exclusively.
+    if (isAndroid) {
+      this.isInitializing = false;
+    } else {
+      void this.initializeAudioCaptureInBackground(config, token);
+    }
   }
 
   private async initializeAudioCaptureInBackground(
@@ -211,7 +224,11 @@ export class VoiceInputManager {
    * Centralized single owner prevents duplicate starts and race conditions.
    */
   private scheduleSpeechRecognitionRestart(): void {
-    if (this.isExplicitlyStopped || this.state !== "listening") {
+    if (
+      this.isExplicitlyStopped ||
+      this.state !== "listening" ||
+      (typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent))
+    ) {
       return;
     }
 
@@ -266,6 +283,8 @@ export class VoiceInputManager {
       return;
     }
 
+    const isAndroid =
+      typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
     const hasStandardSR = Boolean((window as any).SpeechRecognition);
     const hasWebkitSR = Boolean((window as any).webkitSpeechRecognition);
     const SpeechRecognition =
@@ -273,6 +292,7 @@ export class VoiceInputManager {
       (window as any).webkitSpeechRecognition;
 
     console.log("[VOXFLOW-ANDROID] 2. SPEECH RECOGNITION AVAILABILITY:", {
+      platform: isAndroid ? "Android" : "Desktop",
       speechRecognitionExists: hasStandardSR,
       webkitSpeechRecognitionExists: hasWebkitSR,
       constructorSelected: hasWebkitSR && !hasStandardSR ? "webkitSpeechRecognition" : hasStandardSR ? "SpeechRecognition" : "none",
@@ -303,7 +323,8 @@ export class VoiceInputManager {
       const recognizer = new SpeechRecognition();
       console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION constructor called");
 
-      recognizer.continuous = true;
+      // Desktop uses continuous: true for streaming dictation; Android MUST use continuous: false
+      recognizer.continuous = !isAndroid;
       recognizer.interimResults = true;
       recognizer.maxAlternatives = 1;
 
@@ -318,12 +339,13 @@ export class VoiceInputManager {
         lang: recognizer.lang,
         continuous: recognizer.continuous,
         interimResults: recognizer.interimResults,
+        platform: isAndroid ? "Android" : "Desktop",
       });
 
       this.speechRecognizer = recognizer;
 
       recognizer.onstart = () => {
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onstart", { timestamp: Date.now(), delayMs: performance.now() - tStart });
+        console.log("[VOXFLOW-ANDROID] onstart", { timestamp: Date.now(), delayMs: performance.now() - tStart });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onstart");
         if (gen !== this.recognitionGeneration || this.isExplicitlyStopped || this.state !== "listening") {
           try { recognizer.abort(); } catch {}
@@ -333,21 +355,28 @@ export class VoiceInputManager {
         this.isRecognitionStarting = false;
         this.isRecognitionRunning = true;
         this.consecutiveRestarts = 0;
+        if (isAndroid) {
+          this.emitter.emit("audioLevel", 0);
+        }
       };
 
       recognizer.onaudiostart = () => {
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onaudiostart", { timestamp: Date.now() });
+        console.log("[VOXFLOW-ANDROID] onaudiostart", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onaudiostart");
       };
 
       recognizer.onsoundstart = () => {
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onsoundstart", { timestamp: Date.now() });
+        console.log("[VOXFLOW-ANDROID] onsoundstart", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onsoundstart");
       };
 
       recognizer.onspeechstart = () => {
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onspeechstart", { timestamp: Date.now() });
+        console.log("[VOXFLOW-ANDROID] onspeechstart", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onspeechstart");
+        if (isAndroid) {
+          this.emitter.emit("speechStart");
+          this.emitter.emit("audioLevel", 0.45);
+        }
       };
 
       recognizer.onresult = (event: any) => {
@@ -371,7 +400,7 @@ export class VoiceInputManager {
         const trimmedFinal = finalTranscript.trim();
         const trimmedInterim = interimTranscript.trim();
 
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onresult", {
+        console.log("[VOXFLOW-ANDROID] onresult", {
           interim: trimmedInterim || null,
           final: trimmedFinal || null,
           timestamp: Date.now(),
@@ -382,12 +411,22 @@ export class VoiceInputManager {
         });
 
         if (trimmedFinal) {
+          if (isAndroid) {
+            this.emitter.emit("audioLevel", 0);
+          }
           this.emitter.emit("transcript", {
             text: trimmedFinal,
             isFinal: true,
             timestamp: Date.now(),
           });
+          if (isAndroid) {
+            this.emitter.emit("speechEnd");
+          }
         } else if (trimmedInterim) {
+          if (isAndroid) {
+            this.emitter.emit("speechStart");
+            this.emitter.emit("audioLevel", 0.65);
+          }
           this.emitter.emit("transcript", {
             text: trimmedInterim,
             isFinal: false,
@@ -397,23 +436,27 @@ export class VoiceInputManager {
       };
 
       recognizer.onspeechend = () => {
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onspeechend", { timestamp: Date.now() });
+        console.log("[VOXFLOW-ANDROID] onspeechend", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onspeechend");
+        if (isAndroid) {
+          this.emitter.emit("speechEnd");
+          this.emitter.emit("audioLevel", 0);
+        }
       };
 
       recognizer.onsoundend = () => {
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onsoundend", { timestamp: Date.now() });
+        console.log("[VOXFLOW-ANDROID] onsoundend", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onsoundend");
       };
 
       recognizer.onaudioend = () => {
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onaudioend", { timestamp: Date.now() });
+        console.log("[VOXFLOW-ANDROID] onaudioend", { timestamp: Date.now() });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onaudioend");
       };
 
       recognizer.onerror = (event: any) => {
         const errCode = event.error;
-        console.error("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onerror", {
+        console.error("[VOXFLOW-ANDROID] onerror", {
           error: errCode,
           message: (event as any).message || "",
           timestamp: Date.now(),
@@ -430,6 +473,31 @@ export class VoiceInputManager {
 
         if (gen !== this.recognitionGeneration) return;
 
+        if (isAndroid) {
+          this.isRecognitionRunning = false;
+          this.isRecognitionStarting = false;
+          if (errCode === "not-allowed") {
+            this.state = "error";
+            this.emitter.emit("error", {
+              type: "permission-denied",
+              message: "Microphone access is blocked. Allow microphone access and try again.",
+              originalError: event,
+            });
+            this.stop();
+            return;
+          }
+          // On Android: audio-capture, no-speech, aborted must not trigger infinite restart loops
+          if (errCode === "audio-capture" || errCode === "no-speech" || errCode === "aborted") {
+            if (this.state === "listening") {
+              this.state = "idle";
+              this.emitter.emit("stop");
+            }
+            return;
+          }
+          return;
+        }
+
+        // Desktop error handling (100% unchanged)
         if (errCode === "no-speech" || errCode === "aborted") {
           return;
         }
@@ -444,11 +512,12 @@ export class VoiceInputManager {
       };
 
       recognizer.onend = () => {
-        console.log("[VOXFLOW-ANDROID] 4. SPEECH CALLBACK: onend", {
+        console.log("[VOXFLOW-ANDROID] onend", {
           timestamp: Date.now(),
           currentState: this.state,
           gen,
           activeGen: this.recognitionGeneration,
+          platform: isAndroid ? "Android" : "Desktop",
         });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onend", {
           gen,
@@ -461,12 +530,21 @@ export class VoiceInputManager {
         this.isRecognitionRunning = false;
         this.isRecognitionStarting = false;
 
-        // If user intentionally stopped or session is no longer listening, do nothing
-        if (this.isExplicitlyStopped || this.state !== "listening") {
+        // Android: Single utterance lifecycle. DO NOT automatically restart recognition!
+        // The user can tap mic again for the next utterance.
+        if (isAndroid) {
+          this.speechRecognizer = null;
+          if (this.state === "listening") {
+            this.state = "idle";
+            this.emitter.emit("stop");
+          }
           return;
         }
 
-        // Otherwise, automatically schedule self-healing restart
+        // Desktop: Automatic self-healing restart (100% unchanged)
+        if (this.isExplicitlyStopped || this.state !== "listening") {
+          return;
+        }
         this.scheduleSpeechRecognitionRestart();
       };
 
@@ -492,8 +570,11 @@ export class VoiceInputManager {
         name: err?.name,
         message: err?.message,
       });
-      if (!this.isExplicitlyStopped && this.state === "listening") {
+      if (!isAndroid && !this.isExplicitlyStopped && this.state === "listening") {
         this.scheduleSpeechRecognitionRestart();
+      } else if (isAndroid && this.state === "listening") {
+        this.state = "idle";
+        this.emitter.emit("stop");
       }
     }
   }

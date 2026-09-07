@@ -679,6 +679,9 @@ export function useVoiceSession() {
     } else if (session.state === "speaking" || session.state === "thinking") {
       // Natural interrupt: cancel active speech and start listening
       handleBargeIn();
+      if (managerRef.current?.getState() !== "listening") {
+        startSession();
+      }
     } else {
       startSession();
     }
