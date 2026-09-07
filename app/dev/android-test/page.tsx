@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from "react";
+import { VoiceInputManager } from "@/voice/VoiceInputManager";
 
 interface LogEntry {
   id: string;
@@ -16,15 +17,24 @@ export default function AndroidTestPage() {
   const [continuous, setContinuous] = useState<boolean>(false);
   const recognizerRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const voxflowManagerRef = useRef<VoiceInputManager | null>(null);
 
-  const addLog = (text: string, type: "info" | "success" | "error" | "event" = "info") => {
+  const addLog = (
+    text: string,
+    type: "info" | "success" | "error" | "event" = "info",
+    extra?: any
+  ) => {
     const entry: LogEntry = {
       id: `${Date.now()}-${Math.random()}`,
       time: new Date().toISOString().substring(11, 23),
       text,
       type,
     };
-    console.log(`[VOXFLOW-ANDROID] ${text}`);
+    if (extra !== undefined) {
+      console.log(`[ANDROID-STT] ${text}`, extra);
+    } else {
+      console.log(`[ANDROID-STT] ${text}`);
+    }
     setLogs((prev) => [...prev, entry]);
   };
 
@@ -33,23 +43,33 @@ export default function AndroidTestPage() {
     setTranscript("");
   };
 
-  // Test 1: Isolated SpeechRecognition ONLY
+  // TEST A: Isolated SpeechRecognition ONLY
+  // USER TAP -> new webkitSpeechRecognition() -> recognition.start() IMMEDIATELY
+  // NO getUserMedia, NO AudioContext, NO VAD, NO AudioPlayer, NO Gemini, NO Rime
   const runIsolatedSpeechRecognition = () => {
+    stopAll();
     clearLogs();
-    setActiveTest("isolated-sr");
+    setActiveTest("TEST-A");
     const t0 = performance.now();
+    const startTimestamp = Date.now();
 
-    addLog(`1. TAP: User tap event fired (perfNow=${t0.toFixed(1)}ms, isActive=${(navigator as any)?.userActivation?.isActive})`, "info");
-    addLog(`UserAgent: ${navigator.userAgent}`, "info");
+    const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "unknown";
+    const hasStandardSR = typeof window !== "undefined" && Boolean((window as any).SpeechRecognition);
+    const hasWebkitSR = typeof window !== "undefined" && Boolean((window as any).webkitSpeechRecognition);
+    const userActivationIsActive = typeof navigator !== "undefined" && Boolean((navigator as any)?.userActivation?.isActive);
+
+    addLog(`=== TEST A: ISOLATED SpeechRecognition ===`, "info");
+    addLog(`userAgent: ${userAgent}`, "info");
+    addLog(`SpeechRecognition availability: ${hasStandardSR}`, "info");
+    addLog(`webkitSpeechRecognition availability: ${hasWebkitSR}`, "info");
+    addLog(`userActivation.isActive: ${userActivationIsActive}`, "info");
 
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
-      addLog("ERROR: SpeechRecognition API not found in this browser!", "error");
+      addLog("SpeechRecognition API NOT FOUND in this browser!", "error");
       setActiveTest(null);
       return;
     }
-
-    addLog(`2. Constructor: Found ${Boolean((window as any).webkitSpeechRecognition) ? "webkitSpeechRecognition" : "SpeechRecognition"}`, "info");
 
     try {
       const recognizer = new SR();
@@ -57,24 +77,24 @@ export default function AndroidTestPage() {
       recognizer.continuous = continuous;
       recognizer.interimResults = true;
       recognizer.maxAlternatives = 1;
-      recognizer.lang = navigator.language || "en-US";
+      recognizer.lang = (navigator as any)?.language || "en-US";
 
-      addLog(`Config: lang=${recognizer.lang}, continuous=${recognizer.continuous}, interimResults=${recognizer.interimResults}`, "info");
+      addLog(`Configured recognizer: lang=${recognizer.lang}, continuous=${recognizer.continuous}, interimResults=${recognizer.interimResults}`, "info");
 
       recognizer.onstart = () => {
-        addLog(`CALLBACK: onstart (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event");
+        addLog(`onstart fired (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event", { timestamp: Date.now() });
       };
 
       recognizer.onaudiostart = () => {
-        addLog(`CALLBACK: onaudiostart (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event");
+        addLog(`onaudiostart fired (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event", { timestamp: Date.now() });
       };
 
       recognizer.onsoundstart = () => {
-        addLog(`CALLBACK: onsoundstart (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event");
+        addLog(`onsoundstart fired (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event", { timestamp: Date.now() });
       };
 
       recognizer.onspeechstart = () => {
-        addLog(`CALLBACK: onspeechstart (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event");
+        addLog(`onspeechstart fired (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event", { timestamp: Date.now() });
       };
 
       recognizer.onresult = (event: any) => {
@@ -90,114 +110,158 @@ export default function AndroidTestPage() {
         }
         const current = final || interim;
         setTranscript(current);
-        addLog(`CALLBACK: onresult -> "${current}" (isFinal=${Boolean(final)})`, "success");
+        addLog(`onresult fired: "${current}" (isFinal=${Boolean(final)})`, "success", {
+          transcript: current,
+          isFinal: Boolean(final),
+          resultIndex: event.resultIndex,
+          length: event.results.length,
+        });
       };
 
       recognizer.onspeechend = () => {
-        addLog(`CALLBACK: onspeechend (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event");
+        addLog(`onspeechend fired`, "event", { timestamp: Date.now() });
       };
 
       recognizer.onsoundend = () => {
-        addLog(`CALLBACK: onsoundend (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event");
+        addLog(`onsoundend fired`, "event", { timestamp: Date.now() });
       };
 
       recognizer.onaudioend = () => {
-        addLog(`CALLBACK: onaudioend (delay=${(performance.now() - t0).toFixed(1)}ms)`, "event");
+        addLog(`onaudioend fired`, "event", { timestamp: Date.now() });
       };
 
       recognizer.onerror = (event: any) => {
-        addLog(`CALLBACK: onerror -> error="${event.error}", message="${event.message || ""}"`, "error");
+        addLog(`onerror (exact error): "${event.error}", message="${event.message || ""}"`, "error", {
+          error: event.error,
+          message: event.message,
+        });
       };
 
       recognizer.onend = () => {
-        addLog(`CALLBACK: onend (total duration=${(performance.now() - t0).toFixed(1)}ms)`, "info");
+        addLog(`onend fired (total session=${(performance.now() - t0).toFixed(1)}ms)`, "info", { timestamp: Date.now() });
         setActiveTest(null);
       };
 
-      addLog(`3. START: Calling recognizer.start() synchronously at t=${(performance.now() - t0).toFixed(1)}ms...`, "info");
+      addLog(`Calling recognition.start() IMMEDIATELY... (timestamp=${startTimestamp})`, "info");
       recognizer.start();
-      addLog(`4. start() returned synchronously without throwing!`, "success");
+      addLog(`recognition.start() returned synchronously without throwing!`, "success");
     } catch (err: any) {
       addLog(`SYNCHRONOUS EXCEPTION in start(): ${err?.name} - ${err?.message}`, "error");
       setActiveTest(null);
     }
   };
 
-  // Test 2: Isolated getUserMedia ONLY
-  const runIsolatedGetUserMedia = async () => {
+  // TEST B: SpeechRecognition + getUserMedia CONCURRENTLY
+  // USER TAP -> recognition.start() immediately + getUserMedia() separately
+  const runSpeechRecognitionPlusGetUserMedia = async () => {
+    stopAll();
     clearLogs();
-    setActiveTest("isolated-gum");
+    setActiveTest("TEST-B");
     const t0 = performance.now();
-    addLog(`1. getUserMedia called (isActive=${(navigator as any)?.userActivation?.isActive})`, "info");
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const track = stream.getAudioTracks()[0];
-      addLog(`2. getUserMedia SUCCESS (delay=${(performance.now() - t0).toFixed(1)}ms)`, "success");
-      addLog(`Track: label="${track.label}", readyState="${track.readyState}", enabled=${track.enabled}, muted=${track.muted}`, "info");
-      if (track.getSettings) {
-        addLog(`Settings: ${JSON.stringify(track.getSettings())}`, "info");
-      }
-    } catch (err: any) {
-      addLog(`getUserMedia FAILED: ${err?.name} - ${err?.message}`, "error");
-    } finally {
-      setActiveTest(null);
-    }
-  };
-
-  // Test 3: Concurrent Test (SpeechRecognition + getUserMedia)
-  const runConcurrentTest = async () => {
-    clearLogs();
-    setActiveTest("concurrent");
-    const t0 = performance.now();
-    addLog(`1. CONCURRENT TEST STARTED`, "info");
+    addLog(`=== TEST B: SpeechRecognition + getUserMedia ===`, "info");
+    addLog(`userAgent: ${navigator.userAgent}`, "info");
 
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
       addLog("SpeechRecognition not supported", "error");
+      setActiveTest(null);
       return;
     }
 
     try {
-      const r = new SR();
-      r.continuous = continuous;
-      r.interimResults = true;
-      r.lang = navigator.language || "en-US";
+      const recognizer = new SR();
+      recognizerRef.current = recognizer;
+      recognizer.continuous = continuous;
+      recognizer.interimResults = true;
+      recognizer.lang = navigator.language || "en-US";
 
-      r.onstart = () => addLog(`SR onstart`, "event");
-      r.onaudiostart = () => addLog(`SR onaudiostart`, "event");
-      r.onspeechstart = () => addLog(`SR onspeechstart`, "event");
-      r.onresult = (e: any) => {
+      recognizer.onstart = () => addLog(`onstart fired`, "event");
+      recognizer.onaudiostart = () => addLog(`onaudiostart fired`, "event");
+      recognizer.onsoundstart = () => addLog(`onsoundstart fired`, "event");
+      recognizer.onspeechstart = () => addLog(`onspeechstart fired`, "event");
+      recognizer.onresult = (e: any) => {
         const text = e.results[0][0].transcript;
         setTranscript(text);
-        addLog(`SR onresult: "${text}"`, "success");
+        addLog(`onresult fired: "${text}"`, "success");
       };
-      r.onerror = (e: any) => addLog(`SR onerror: ${e.error}`, "error");
-      r.onend = () => addLog(`SR onend`, "info");
+      recognizer.onerror = (e: any) => {
+        addLog(`onerror (exact error): "${e.error}", message="${e.message || ""}"`, "error");
+      };
+      recognizer.onend = () => {
+        addLog(`onend fired`, "info");
+        setActiveTest(null);
+      };
 
-      addLog(`Starting SpeechRecognition synchronously...`, "info");
-      r.start();
+      addLog(`1. Calling recognition.start() IMMEDIATELY...`, "info");
+      recognizer.start();
+      addLog(`2. recognition.start() initiated successfully`, "success");
 
-      addLog(`Now concurrently starting getUserMedia...`, "info");
+      addLog(`3. Now requesting getUserMedia({ audio: true }) concurrently...`, "info");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      addLog(`getUserMedia resolved! Track readyState=${stream.getAudioTracks()[0]?.readyState}`, "success");
+      streamRef.current = stream;
+      const track = stream.getAudioTracks()[0];
+      addLog(`4. getUserMedia resolved! Track label="${track?.label}", readyState="${track?.readyState}"`, "success");
+      addLog(`Speak into microphone now to test if onresult or onerror fires...`, "info");
     } catch (err: any) {
-      addLog(`Concurrent test error: ${err?.message}`, "error");
+      addLog(`TEST B error: ${err?.name} - ${err?.message}`, "error");
     }
+  };
+
+  // TEST C: Complete VOXFLOW pipeline
+  const runCompleteVoxflow = () => {
+    stopAll();
+    clearLogs();
+    setActiveTest("TEST-C");
+
+    addLog(`=== TEST C: COMPLETE VOXFLOW PIPELINE ===`, "info");
+    addLog(`Instantiating VoiceInputManager...`, "info");
+
+    const manager = new VoiceInputManager();
+    voxflowManagerRef.current = manager;
+
+    manager.on("startListening", () => addLog(`VOXFLOW event: startListening`, "event"));
+    manager.on("speechStart", () => addLog(`VOXFLOW event: speechStart (VAD detected human voice)`, "event"));
+    manager.on("speechEnd", () => addLog(`VOXFLOW event: speechEnd (VAD detected silence boundary)`, "event"));
+    manager.on("transcript", (chunk) => {
+      setTranscript(chunk.text);
+      addLog(`VOXFLOW event: transcript -> "${chunk.text}" (isFinal=${chunk.isFinal})`, "success");
+    });
+    manager.on("audioLevel", (level) => {
+      if (level > 0.15) {
+        // throttled log
+      }
+    });
+    manager.on("error", (err) => {
+      addLog(`VOXFLOW event: error -> "${err.type}": ${err.message}`, "error");
+    });
+    manager.on("stop", () => {
+      addLog(`VOXFLOW event: stop`, "info");
+      setActiveTest(null);
+    });
+
+    addLog(`Calling manager.start()...`, "info");
+    manager.start();
   };
 
   const stopAll = () => {
     if (recognizerRef.current) {
-      try { recognizerRef.current.abort(); } catch {}
+      try {
+        recognizerRef.current.onend = null;
+        recognizerRef.current.onerror = null;
+        recognizerRef.current.abort();
+      } catch {}
       recognizerRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    if (voxflowManagerRef.current) {
+      voxflowManagerRef.current.dispose();
+      voxflowManagerRef.current = null;
+    }
     setActiveTest(null);
-    addLog("Stopped all active sessions.", "info");
   };
 
   const copyLogs = () => {
@@ -211,13 +275,13 @@ export default function AndroidTestPage() {
       <div className="border-b border-zinc-800 pb-3 mb-4">
         <h1 className="text-xl font-bold text-amber-400">VOXFLOW — Android Diagnostic Lab</h1>
         <p className="text-xs text-zinc-400 mt-1">
-          Isolated SpeechRecognition & AudioCapture validation for Android Chrome.
+          Android Chrome Root Cause Isolation (Live Diagnostic)
         </p>
       </div>
 
       {/* Control buttons */}
-      <div className="space-y-2 mb-4">
-        <div className="flex items-center gap-2 mb-2">
+      <div className="space-y-3 mb-4">
+        <div className="flex items-center gap-2 p-2 bg-zinc-900 rounded-lg border border-zinc-800">
           <label className="text-xs text-zinc-300 flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -225,40 +289,45 @@ export default function AndroidTestPage() {
               onChange={(e) => setContinuous(e.target.checked)}
               className="rounded"
             />
-            <span>continuous: {continuous ? "TRUE (Dictation)" : "FALSE (Single utterance - Standard Android)"}</span>
+            <span>
+              continuous: {continuous ? "TRUE (Dictation - triggers Android early exit)" : "FALSE (Single-Utterance - Android Standard)"}
+            </span>
           </label>
         </div>
 
         <button
           onClick={runIsolatedSpeechRecognition}
           disabled={activeTest !== null}
-          className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 font-semibold text-sm shadow-lg disabled:opacity-50"
+          className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold text-sm shadow-lg disabled:opacity-50 text-left flex justify-between items-center"
         >
-          1. TEST ISOLATED SPEECHRECOGNITION ONLY
+          <span>TEST A: Isolated SpeechRecognition ONLY</span>
+          <span className="text-xs bg-blue-800 px-2 py-1 rounded">No getUserMedia</span>
         </button>
 
         <button
-          onClick={runIsolatedGetUserMedia}
+          onClick={runSpeechRecognitionPlusGetUserMedia}
           disabled={activeTest !== null}
-          className="w-full py-3 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 font-semibold text-sm shadow-lg disabled:opacity-50"
+          className="w-full py-3.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 font-bold text-sm shadow-lg disabled:opacity-50 text-left flex justify-between items-center"
         >
-          2. TEST ISOLATED getUserMedia ONLY
+          <span>TEST B: SpeechRecognition + getUserMedia</span>
+          <span className="text-xs bg-amber-800 px-2 py-1 rounded">Concurrent Mic</span>
         </button>
 
         <button
-          onClick={runConcurrentTest}
+          onClick={runCompleteVoxflow}
           disabled={activeTest !== null}
-          className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-sm shadow-lg disabled:opacity-50"
+          className="w-full py-3.5 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 font-bold text-sm shadow-lg disabled:opacity-50 text-left flex justify-between items-center"
         >
-          3. TEST CONCURRENT (SR + getUserMedia)
+          <span>TEST C: Complete VOXFLOW Pipeline</span>
+          <span className="text-xs bg-purple-800 px-2 py-1 rounded">Full Stack</span>
         </button>
 
         {activeTest && (
           <button
             onClick={stopAll}
-            className="w-full py-2.5 px-4 rounded-xl bg-red-600 font-semibold text-sm shadow-lg"
+            className="w-full py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-500 font-bold text-sm shadow-lg"
           >
-            STOP TEST
+            STOP ACTIVE TEST ({activeTest})
           </button>
         )}
       </div>
@@ -275,18 +344,18 @@ export default function AndroidTestPage() {
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3">
         <div className="flex justify-between items-center mb-2 pb-2 border-b border-zinc-800">
           <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
-            Diagnostic Event Stream ({logs.length})
+            [ANDROID-STT] Event Stream ({logs.length})
           </span>
           <div className="flex gap-2">
             <button
               onClick={copyLogs}
-              className="text-xs px-2 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300"
+              className="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300 font-medium"
             >
               Copy Logs
             </button>
             <button
               onClick={clearLogs}
-              className="text-xs px-2 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300"
+              className="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300 font-medium"
             >
               Clear
             </button>
@@ -296,7 +365,7 @@ export default function AndroidTestPage() {
         <div className="space-y-1.5 font-mono text-xs max-h-96 overflow-y-auto">
           {logs.length === 0 ? (
             <div className="text-zinc-600 italic py-4 text-center">
-              Tap any test button above on your Android phone to begin.
+              Tap TEST A, TEST B, or TEST C above on your Android phone to execute.
             </div>
           ) : (
             logs.map((log) => (
