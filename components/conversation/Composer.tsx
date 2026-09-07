@@ -43,7 +43,7 @@ export function Composer({
       case "thinking":
         return "Thinking…";
       case "speaking":
-        return "Speaking… tap mic to interrupt";
+        return "Speaking… speak anytime to interrupt";
       case "error":
         return "Microphone notice. Tap mic to retry…";
       case "idle":

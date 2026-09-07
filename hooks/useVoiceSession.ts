@@ -48,6 +48,7 @@ export function useVoiceSession() {
 
   // Track processed final transcripts to prevent duplicate generation calls
   const lastProcessedTranscriptRef = useRef<string>("");
+  const playbackStartTimeRef = useRef<number>(0);
 
   // Internal observability metrics (timestamps for performance evidence)
   const telemetryRef = useRef({
@@ -109,8 +110,9 @@ export function useVoiceSession() {
       return list;
     });
 
-    // 4. Reset hysteresis & clear active user utterance buffer
+    // 4. Reset hysteresis & claim turn on voice manager
     if (managerRef.current) {
+      managerRef.current.onBargeInTriggered();
       managerRef.current.setHysteresis(1.0);
     }
     activeUserMsgIdRef.current = null;
@@ -194,6 +196,7 @@ export function useVoiceSession() {
                 const tts = new TTSSession(genId || `gen-${Date.now()}`, audioPlayerRef.current, {
                   onPlayStart: () => {
                     telemetryRef.current.firstPlaybackStarted = Date.now();
+                    playbackStartTimeRef.current = Date.now();
                     if (managerRef.current) {
                       managerRef.current.setHysteresis(1.6);
                     }
@@ -201,6 +204,21 @@ export function useVoiceSession() {
                       ...prev,
                       state: "speaking",
                     }));
+
+                    // HANDS-FREE BARGE-IN:
+                    // Enable SpeechRecognition barge-in window when assistant starts speaking
+                    // so the user can interrupt hands-free without touching the mic button!
+                    if (managerRef.current) {
+                      managerRef.current.startBargeInListening({
+                        deviceId:
+                          audioConfig.selectedInputId !== "default"
+                            ? audioConfig.selectedInputId
+                            : undefined,
+                        noiseSuppression: audioConfig.noiseSuppression,
+                        echoCancellation: audioConfig.echoCancellation,
+                        autoGainControl: audioConfig.autoGainControl,
+                      });
+                    }
                   },
                   onAudioLevel: (level) => {
                     setSession((prev) => ({
@@ -214,7 +232,7 @@ export function useVoiceSession() {
                   onPlayEnd: () => {
                     telemetryRef.current.playbackCompleted = Date.now();
                     if (managerRef.current && managerRef.current.isCapturing()) {
-                      // Continuous conversational loop: return to listening for next turn
+                      // Continuous conversational loop: return to listening for next turn (Desktop)
                       managerRef.current.setHysteresis(1.0);
                       setSession((prev) => ({
                         ...prev,
@@ -223,6 +241,10 @@ export function useVoiceSession() {
                         audioLevels: { ...prev.audioLevels, outputLevel: 0 },
                       }));
                     } else {
+                      // Android: Stop barge-in listening and return safely to idle
+                      if (managerRef.current) {
+                        managerRef.current.stopBargeInListening();
+                      }
                       setSession((prev) => ({
                         ...prev,
                         state: "idle",
@@ -420,9 +442,12 @@ export function useVoiceSession() {
       }));
 
       // Full-duplex barge-in: Only interrupt when assistant is actively SPEAKING audio.
-      // Do NOT abort during 'thinking' because trailing prompt breath or room noise would kill the Gemini request!
+      // Guard against false triggers during the first 250ms of speaker playback startup
       if (sessionStateRef.current === "speaking") {
-        handleBargeInRef.current();
+        if (Date.now() - playbackStartTimeRef.current > 250) {
+          console.log("[VOXFLOW-BARGEIN] speechStart detected while assistant speaking -> stopping Rime immediately");
+          handleBargeInRef.current();
+        }
       }
     });
 
@@ -445,6 +470,7 @@ export function useVoiceSession() {
 
       // Full-duplex barge-in: Only interrupt when assistant is actively SPEAKING audio.
       if (sessionStateRef.current === "speaking") {
+        console.log("[VOXFLOW-BARGEIN] transcript detected while assistant speaking -> stopping Rime immediately:", text);
         handleBargeInRef.current();
       }
 

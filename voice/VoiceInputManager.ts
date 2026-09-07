@@ -26,6 +26,7 @@ export class VoiceInputManager {
   private configuredLanguage?: string;
 
   private isExplicitlyStopped: boolean = false;
+  private isBargeInActive: boolean = false;
   private initToken: number = 0;
   private isInitializing: boolean = false;
 
@@ -98,6 +99,73 @@ export class VoiceInputManager {
     }
   }
 
+  /**
+   * Android Hands-Free Barge-In:
+   * Called when assistant begins SPEAKING audio.
+   * Starts SpeechRecognition (and ONLY SpeechRecognition) so the user can interrupt hands-free.
+   * Zero getUserMedia, zero AudioContext, zero VAD.
+   */
+  public startBargeInListening(config: AudioCaptureConfig = {}): void {
+    const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+    if (!isAndroid) {
+      // Desktop already has continuous full-duplex listening active.
+      if (this.state !== "listening") {
+        this.start(config);
+      }
+      return;
+    }
+
+    if (this.isExplicitlyStopped) {
+      return;
+    }
+
+    this.isBargeInActive = true;
+    this.configuredLanguage = config.language;
+    this.consecutiveRestarts = 0;
+
+    if (this.isRecognitionRunning || this.isRecognitionStarting) {
+      console.log("[VOXFLOW-ANDROID] BARGE-IN: SpeechRecognition already active for barge-in");
+      return;
+    }
+
+    this.state = "listening";
+    console.log("[VOXFLOW-ANDROID] BARGE-IN LISTENING started (SpeechRecognition ONLY, getUserMedia: false)");
+    this.startSpeechRecognitionSafely(performance.now());
+  }
+
+  /**
+   * Called when barge-in is triggered by user speech to claim the turn.
+   */
+  public onBargeInTriggered(): void {
+    this.isBargeInActive = false;
+    this.state = "listening";
+    console.log("[VOXFLOW-ANDROID] BARGE-IN TRIGGERED: user claimed turn, capturing full utterance");
+  }
+
+  /**
+   * Called when assistant speech finishes normally without interruption.
+   * Safely terminates the barge-in recognizer and cleanly returns to idle.
+   */
+  public stopBargeInListening(): void {
+    this.isBargeInActive = false;
+    const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+    if (isAndroid) {
+      if (this.speechRecognizer) {
+        try {
+          this.speechRecognizer.onend = null;
+          this.speechRecognizer.onerror = null;
+          this.speechRecognizer.abort();
+        } catch {}
+        this.speechRecognizer = null;
+      }
+      this.isRecognitionRunning = false;
+      this.isRecognitionStarting = false;
+      this.state = "idle";
+      this.emitter.emit("stop");
+      console.log("[VOXFLOW-ANDROID] BARGE-IN LISTENING ended normally (playback complete, now idle)");
+    }
+  }
+
   private async initializeAudioCaptureInBackground(
     config: AudioCaptureConfig,
     token: number
@@ -156,6 +224,7 @@ export class VoiceInputManager {
   }
 
   public stop(): void {
+    this.isBargeInActive = false;
     this.isExplicitlyStopped = true;
     this.initToken++;
     this.recognitionGeneration++;
@@ -412,6 +481,7 @@ export class VoiceInputManager {
 
         if (trimmedFinal) {
           if (isAndroid) {
+            this.isBargeInActive = false;
             this.emitter.emit("audioLevel", 0);
           }
           this.emitter.emit("transcript", {
@@ -424,6 +494,7 @@ export class VoiceInputManager {
           }
         } else if (trimmedInterim) {
           if (isAndroid) {
+            this.isBargeInActive = false;
             this.emitter.emit("speechStart");
             this.emitter.emit("audioLevel", 0.65);
           }
@@ -477,6 +548,7 @@ export class VoiceInputManager {
           this.isRecognitionRunning = false;
           this.isRecognitionStarting = false;
           if (errCode === "not-allowed") {
+            this.isBargeInActive = false;
             this.state = "error";
             this.emitter.emit("error", {
               type: "permission-denied",
@@ -486,8 +558,12 @@ export class VoiceInputManager {
             this.stop();
             return;
           }
-          // On Android: audio-capture, no-speech, aborted must not trigger infinite restart loops
+          // On Android: silence timeout (no-speech) during barge-in listening is expected; onend will renew
+          if (errCode === "no-speech" && this.isBargeInActive && !this.isExplicitlyStopped) {
+            return;
+          }
           if (errCode === "audio-capture" || errCode === "no-speech" || errCode === "aborted") {
+            this.isBargeInActive = false;
             if (this.state === "listening") {
               this.state = "idle";
               this.emitter.emit("stop");
@@ -518,6 +594,7 @@ export class VoiceInputManager {
           gen,
           activeGen: this.recognitionGeneration,
           platform: isAndroid ? "Android" : "Desktop",
+          isBargeInActive: this.isBargeInActive,
         });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onend", {
           gen,
@@ -530,10 +607,17 @@ export class VoiceInputManager {
         this.isRecognitionRunning = false;
         this.isRecognitionStarting = false;
 
-        // Android: Single utterance lifecycle. DO NOT automatically restart recognition!
-        // The user can tap mic again for the next utterance.
+        // Android lifecycle:
         if (isAndroid) {
           this.speechRecognizer = null;
+          // If assistant is still speaking and barge-in is active, renew the listening window
+          if (this.isBargeInActive && this.state === "listening" && !this.isExplicitlyStopped) {
+            console.log("[VOXFLOW-ANDROID] onend during assistant speech -> renewing barge-in SpeechRecognition window");
+            this.startSpeechRecognitionSafely();
+            return;
+          }
+
+          // Single utterance lifecycle ended:
           if (this.state === "listening") {
             this.state = "idle";
             this.emitter.emit("stop");
