@@ -2,6 +2,7 @@ import { prepareTextForSpeech } from "./textProcessor";
 
 export class SentenceSegmenter {
   private buffer: string = "";
+  private emittedSentenceCount: number = 0;
 
   // Common abbreviations to avoid premature segmentation
   private static ABBREVIATIONS = new Set([
@@ -19,6 +20,14 @@ export class SentenceSegmenter {
       const cleanSpoken = prepareTextForSpeech(sentence);
       if (cleanSpoken.length > 0) {
         readySentences.push(cleanSpoken);
+        this.emittedSentenceCount++;
+        console.log("[VOXFLOW-E2E]", {
+          component: "SEGMENTER",
+          event: "sentence emitted",
+          sentenceIndex: this.emittedSentenceCount - 1,
+          sentenceTextLength: cleanSpoken.length,
+          timestamp: Date.now(),
+        });
       }
     }
 
@@ -36,6 +45,14 @@ export class SentenceSegmenter {
       const cleanSpoken = prepareTextForSpeech(sentence);
       if (cleanSpoken.length > 0) {
         readySentences.push(cleanSpoken);
+        this.emittedSentenceCount++;
+        console.log("[VOXFLOW-E2E]", {
+          component: "SEGMENTER",
+          event: "sentence emitted (flush)",
+          sentenceIndex: this.emittedSentenceCount - 1,
+          sentenceTextLength: cleanSpoken.length,
+          timestamp: Date.now(),
+        });
       }
     }
 
@@ -46,14 +63,35 @@ export class SentenceSegmenter {
       const cleanSpoken = prepareTextForSpeech(remaining);
       if (cleanSpoken.length > 0) {
         readySentences.push(cleanSpoken);
+        this.emittedSentenceCount++;
+        console.log("[VOXFLOW-E2E]", {
+          component: "SEGMENTER",
+          event: "sentence emitted (trailing flush)",
+          sentenceIndex: this.emittedSentenceCount - 1,
+          sentenceTextLength: cleanSpoken.length,
+          timestamp: Date.now(),
+        });
       }
     }
+
+    console.log("[VOXFLOW-E2E]", {
+      component: "SEGMENTER",
+      event: "final buffer flushed",
+      remainingBufferLength: this.buffer.length, // Verified 0
+      totalEmitted: this.emittedSentenceCount,
+      timestamp: Date.now(),
+    });
 
     return readySentences;
   }
 
   public reset(): void {
     this.buffer = "";
+    this.emittedSentenceCount = 0;
+  }
+
+  public getRemainingBufferLength(): number {
+    return this.buffer.length;
   }
 
   private extractNextSentence(): string | null {
@@ -64,7 +102,21 @@ export class SentenceSegmenter {
     let searchOffset = 0;
     while (searchOffset < this.buffer.length) {
       const sub = this.buffer.substring(searchOffset);
-      const match = sub.match(/([.!?।\n])(\s+|$)/);
+
+      // Low-latency optimization: for the very first chunk only, allow splitting at a natural clause break
+      // (comma, semicolon, colon) if at least 6 words have accumulated, to minimize Time-To-First-Audio (TTFA).
+      let match = sub.match(/([.!?\n]|[\u0964\u0965])(\s+|$)/);
+      if (this.emittedSentenceCount === 0 && (!match || match.index === undefined || match.index > 80)) {
+        const clauseMatch = sub.match(/([,;:])(\s+)/);
+        if (clauseMatch && clauseMatch.index !== undefined) {
+          const candidateBeforeClause = sub.substring(0, clauseMatch.index).trim();
+          const wordCount = candidateBeforeClause.split(/\s+/).length;
+          if (wordCount >= 6 && wordCount <= 14) {
+            match = clauseMatch;
+          }
+        }
+      }
+
       if (!match || match.index === undefined) {
         return null; // No boundary found in current buffer
       }

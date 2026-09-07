@@ -3,6 +3,7 @@ import { SentenceSegmenter } from "./sentenceSegmenter";
 import { AudioQueueItem, TTSSessionCallbacks } from "./types";
 
 type SentenceStatus = "pending" | "synthesizing" | "ready" | "failed";
+type AudioQueueState = "IDLE" | "BUFFERING" | "PLAYING" | "DRAINING" | "COMPLETED" | "INTERRUPTED";
 
 export class TTSSession {
   private generationId: string;
@@ -10,6 +11,9 @@ export class TTSSession {
   private player: AudioPlayer;
   private callbacks: TTSSessionCallbacks;
   private abortController: AbortController | null = null;
+
+  // Single authoritative playback state machine
+  private queueState: AudioQueueState = "IDLE";
 
   // Ordered sentences producer buffer
   private sentences: string[] = [];
@@ -23,32 +27,15 @@ export class TTSSession {
   private nextSynthesisIndex: number = 0;
   private nextPlayIndex: number = 0;
   private activeFetches: number = 0;
-  private readonly maxConcurrentFetches: number = 4; // Bounded prefetch lookahead (4 concurrent fetches prevents queue starvation)
+  private readonly maxConcurrentFetches: number = 3; // Bounded prefetch target (2-3 concurrent requests)
 
-  // DEV-only diagnostic metrics (Section 7)
+  // Dev diagnostic metrics
   private geminiSentenceCount: number = 0;
   private ttsDispatchedCount: number = 0;
   private ttsCompletedCount: number = 0;
   private audioPlayedCount: number = 0;
 
-  // [VOXFLOW-TTS] Phase 1 telemetry
   private previousAudioEndedAt: number = 0;
-  private sentenceTelemetry: Map<number, {
-    sentenceIndex: number;
-    sentenceTextLength: number;
-    ttsRequestStart: number;
-    ttsResponseStatus: number;
-    ttsResponseDuration: number;
-    audioByteLength: number;
-    queuePushTimestamp: number;
-    queuePosition: number;
-    playbackStart: number;
-    playbackEnd: number;
-    playbackError: string | null;
-    previousAudioEndedAt: number;
-    nextAudioStartedAt: number;
-    audioGapMs: number;
-  }> = new Map();
 
   constructor(generationId: string, player: AudioPlayer, callbacks: TTSSessionCallbacks) {
     this.generationId = generationId;
@@ -56,10 +43,27 @@ export class TTSSession {
     this.callbacks = callbacks;
     this.segmenter = new SentenceSegmenter();
     this.abortController = new AbortController();
+    this.queueState = "BUFFERING";
+
+    console.log("[VOXFLOW-E2E]", {
+      component: "QUEUE",
+      event: "initialized",
+      generationId: this.generationId,
+      queueState: this.queueState,
+      timestamp: Date.now(),
+    });
   }
 
   public appendTextChunk(textChunk: string): void {
     if (this.abortController?.signal.aborted) return;
+
+    console.log("[VOXFLOW-E2E]", {
+      component: "SEGMENTER",
+      event: "chunk received",
+      chunkLength: textChunk.length,
+      generationId: this.generationId,
+      timestamp: Date.now(),
+    });
 
     const newSentences = this.segmenter.append(textChunk);
     for (const sentence of newSentences) {
@@ -78,6 +82,18 @@ export class TTSSession {
       this.enqueueSentence(sentence);
     }
 
+    if (this.queueState === "PLAYING" || this.queueState === "BUFFERING") {
+      this.queueState = "DRAINING";
+      console.log("[VOXFLOW-E2E]", {
+        component: "QUEUE",
+        event: "state changed",
+        queueState: this.queueState,
+        totalSentences: this.sentences.length,
+        generationId: this.generationId,
+        timestamp: Date.now(),
+      });
+    }
+
     // Trigger workers to ensure all queued sentences are synthesized and drained
     this.pumpSynthesis();
     this.pumpPlayback();
@@ -85,6 +101,15 @@ export class TTSSession {
   }
 
   public cancel(): void {
+    this.queueState = "INTERRUPTED";
+    console.log("[VOXFLOW-E2E]", {
+      component: "QUEUE",
+      event: "queue purge",
+      generationId: this.generationId,
+      purgedCount: this.sentences.length - this.nextPlayIndex,
+      timestamp: Date.now(),
+    });
+
     if (this.abortController) {
       try {
         this.abortController.abort();
@@ -108,6 +133,7 @@ export class TTSSession {
   public getDiagnostics() {
     return {
       generationId: this.generationId,
+      queueState: this.queueState,
       geminiSentenceCount: this.geminiSentenceCount,
       ttsDispatchedCount: this.ttsDispatchedCount,
       ttsCompletedCount: this.ttsCompletedCount,
@@ -124,20 +150,28 @@ export class TTSSession {
    */
   public onAudioItemEnded(item?: AudioQueueItem): void {
     if (this.abortController?.signal.aborted) return;
-    if (item && item.generationId !== this.generationId) return;
+    if (item && item.generationId !== this.generationId) {
+      console.warn(`[VOXFLOW-E2E] QUEUE: item ended for mismatched generation ${item.generationId}, ignoring`);
+      return;
+    }
 
     const now = Date.now();
     this.previousAudioEndedAt = now;
     const finishedIndex = item ? item.index : this.nextPlayIndex;
-    const tel = this.sentenceTelemetry.get(finishedIndex);
-    if (tel) {
-      tel.playbackEnd = now;
-    }
-    console.log(`[VOXFLOW-TTS] Sentence ${finishedIndex} playback ended at ${now}. Duration: ${tel?.playbackStart ? now - tel.playbackStart : 0}ms. Marked previousAudioEndedAt.`);
 
     this.audioPlayedCount++;
     this.isAudioPlaying = false;
     this.nextPlayIndex++;
+
+    console.log("[VOXFLOW-E2E]", {
+      component: "QUEUE",
+      event: "dequeue",
+      sentenceIndex: finishedIndex,
+      nextIndex: this.nextPlayIndex,
+      totalQueued: this.sentences.length,
+      generationId: this.generationId,
+      timestamp: now,
+    });
 
     // Continue playback with next sequential sentence
     this.pumpPlayback();
@@ -149,7 +183,6 @@ export class TTSSession {
 
   /**
    * Safe public playNext() method for defensive lifecycle and external queue triggers.
-   * If audio is already playing, this safely no-ops to prevent double advancement.
    */
   public playNext(): void {
     if (this.abortController?.signal.aborted) return;
@@ -166,21 +199,14 @@ export class TTSSession {
     this.sentenceStatuses.push("pending");
     this.geminiSentenceCount++;
 
-    this.sentenceTelemetry.set(index, {
+    console.log("[VOXFLOW-E2E]", {
+      component: "QUEUE",
+      event: "enqueue",
       sentenceIndex: index,
       sentenceTextLength: clean.length,
-      ttsRequestStart: 0,
-      ttsResponseStatus: 0,
-      ttsResponseDuration: 0,
-      audioByteLength: 0,
-      queuePushTimestamp: Date.now(),
-      queuePosition: index,
-      playbackStart: 0,
-      playbackEnd: 0,
-      playbackError: null,
-      previousAudioEndedAt: 0,
-      nextAudioStartedAt: 0,
-      audioGapMs: 0,
+      queueLength: this.sentences.length,
+      generationId: this.generationId,
+      timestamp: Date.now(),
     });
 
     this.pumpSynthesis();
@@ -203,16 +229,21 @@ export class TTSSession {
       this.activeFetches++;
       this.ttsDispatchedCount++;
 
-      const tel = this.sentenceTelemetry.get(index);
-      if (tel) {
-        tel.ttsRequestStart = Date.now();
-      }
+      const ttsStart = Date.now();
+      console.log("[VOXFLOW-E2E]", {
+        component: "TTS",
+        event: "request start",
+        sentenceIndex: index,
+        sentenceTextLength: sentenceText.length,
+        generationId: this.generationId,
+        timestamp: ttsStart,
+      });
 
       (async () => {
         let blob: Blob | null = null;
         let attempts = 0;
         let lastStatus = 0;
-        const maxAttempts = 2; // Retry once if transient failure (Section 10)
+        const maxAttempts = 2; // Retry transient failures once
 
         while (attempts < maxAttempts && !this.abortController?.signal.aborted) {
           attempts++;
@@ -254,25 +285,36 @@ export class TTSSession {
         if (this.abortController?.signal.aborted) return;
 
         this.activeFetches--;
+        const durationMs = Date.now() - ttsStart;
 
         if (blob && blob.size > 0) {
           this.audioBlobs.set(index, blob);
           this.sentenceStatuses[index] = "ready";
           this.ttsCompletedCount++;
-          if (tel) {
-            tel.ttsResponseStatus = lastStatus || 200;
-            tel.ttsResponseDuration = Date.now() - tel.ttsRequestStart;
-            tel.audioByteLength = blob.size;
-          }
+
+          console.log("[VOXFLOW-E2E]", {
+            component: "TTS",
+            event: "response received",
+            sentenceIndex: index,
+            responseStatus: lastStatus || 200,
+            audioByteCount: blob.size,
+            requestDuration: durationMs,
+            generationId: this.generationId,
+            timestamp: Date.now(),
+          });
         } else {
-          // Graceful handling of sentence failure: skip failed sentence, do NOT freeze or abort queue (Section 10)
+          // Graceful handling of sentence failure: skip failed sentence, do NOT freeze or abort queue
           this.sentenceStatuses[index] = "failed";
-          if (tel) {
-            tel.ttsResponseStatus = lastStatus || 500;
-            tel.ttsResponseDuration = Date.now() - tel.ttsRequestStart;
-            tel.playbackError = "synthesis failed";
-          }
-          console.warn(`[TTSSession] Sentence index ${index} failed synthesis; skipping to preserve speech continuity.`);
+          console.error("[VOXFLOW-E2E]", {
+            component: "TTS",
+            event: "error",
+            sentenceIndex: index,
+            responseStatus: lastStatus || 500,
+            requestDuration: durationMs,
+            generationId: this.generationId,
+            error: "synthesis failed after retries",
+            timestamp: Date.now(),
+          });
         }
 
         // Fill prefetch pipeline
@@ -303,6 +345,7 @@ export class TTSSession {
       const blob = this.audioBlobs.get(this.nextPlayIndex);
       if (!blob) {
         // Guard against missing blob
+        console.warn(`[VOXFLOW-E2E] QUEUE: skipped index ${this.nextPlayIndex} due to missing blob`);
         this.nextPlayIndex++;
         this.pumpPlayback();
         return;
@@ -313,32 +356,20 @@ export class TTSSession {
       const textToPlay = this.sentences[indexToPlay];
 
       this.isAudioPlaying = true;
+      this.queueState = "PLAYING";
 
       const now = Date.now();
-      const tel = this.sentenceTelemetry.get(indexToPlay);
       const gap = this.previousAudioEndedAt > 0 ? Math.max(0, now - this.previousAudioEndedAt) : 0;
-      if (tel) {
-        tel.playbackStart = now;
-        tel.nextAudioStartedAt = now;
-        tel.previousAudioEndedAt = this.previousAudioEndedAt;
-        tel.audioGapMs = gap;
-      }
 
-      console.log("[VOXFLOW-TTS]", {
+      console.log("[VOXFLOW-E2E]", {
+        component: "QUEUE",
+        event: "playback dispatched",
         sentenceIndex: indexToPlay,
-        sentenceTextLength: tel?.sentenceTextLength ?? textToPlay.length,
-        ttsRequestStart: tel?.ttsRequestStart ?? 0,
-        ttsResponseStatus: tel?.ttsResponseStatus ?? 200,
-        ttsResponseDuration: tel?.ttsResponseDuration ?? 0,
-        audioByteLength: tel?.audioByteLength ?? blob.size,
-        queuePushTimestamp: tel?.queuePushTimestamp ?? 0,
-        queuePosition: indexToPlay,
-        playbackStart: now,
-        playbackEnd: 0,
-        playbackError: tel?.playbackError ?? null,
-        previousAudioEndedAt: this.previousAudioEndedAt,
-        nextAudioStartedAt: now,
+        sentenceTextLength: textToPlay.length,
         audioGapMs: gap,
+        queueLength: this.sentences.length,
+        generationId: this.generationId,
+        timestamp: now,
       });
 
       if (!this.hasStartedPlayback) {
@@ -357,12 +388,19 @@ export class TTSSession {
       this.player.playBlob(item);
     } else if (currentStatus === "failed") {
       // Advance past failed sentence without stalling
+      console.warn(`[VOXFLOW-E2E] QUEUE: skipped index ${this.nextPlayIndex} due to failed status`);
       this.nextPlayIndex++;
       this.pumpPlayback();
     } else {
       // Current sentence is still pending or synthesizing.
-      // Strict order: wait for this sentence to become ready before playing.
-      console.log(`[VOXFLOW-TTS] Sentence ${this.nextPlayIndex} not ready yet (${currentStatus}). Queue waiting for synthesis.`);
+      console.log("[VOXFLOW-E2E]", {
+        component: "QUEUE",
+        event: "waiting for synthesis",
+        currentIndex: this.nextPlayIndex,
+        currentStatus,
+        generationId: this.generationId,
+        timestamp: Date.now(),
+      });
     }
   }
 
@@ -376,6 +414,14 @@ export class TTSSession {
       !this.isAudioPlaying &&
       this.activeFetches === 0
     ) {
+      this.queueState = "COMPLETED";
+      console.log("[VOXFLOW-E2E]", {
+        component: "QUEUE",
+        event: "completed",
+        totalSentencesPlayed: this.audioPlayedCount,
+        generationId: this.generationId,
+        timestamp: Date.now(),
+      });
       this.callbacks.onPlayEnd(this.generationId);
     }
   }

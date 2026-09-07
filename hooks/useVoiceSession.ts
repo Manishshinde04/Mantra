@@ -68,6 +68,7 @@ export function useVoiceSession() {
   // Cancel any active Rime speech, playback, and queued audio
   const cancelCurrentSpeech = useCallback(() => {
     isGeneratingRef.current = false;
+    console.log("[VOXFLOW-E2E] [BARGE-IN] Rime stop, queue purge, generation invalidated");
     if (activeTtsSessionRef.current) {
       activeTtsSessionRef.current.cancel();
       activeTtsSessionRef.current = null;
@@ -75,17 +76,21 @@ export function useVoiceSession() {
     if (audioPlayerRef.current) {
       audioPlayerRef.current.fastStop();
     }
-    setSession((prev) => ({
-      ...prev,
-      state: prev.state === "speaking" ? "idle" : prev.state,
-      audioLevels: { ...prev.audioLevels, outputLevel: 0 },
-    }));
+    setSession((prev) => {
+      console.log(`[VOXFLOW-E2E] [SESSION] state -> ${prev.state === "speaking" ? "idle" : prev.state} (cancelled)`);
+      return {
+        ...prev,
+        state: prev.state === "speaking" ? "idle" : prev.state,
+        audioLevels: { ...prev.audioLevels, outputLevel: 0 },
+      };
+    });
   }, []);
 
   // Instant Full-Duplex Interruption / Barge-in Handler
   const handleBargeIn = useCallback(() => {
     const interruptStart = performance.now();
     isGeneratingRef.current = false;
+    console.log("[VOXFLOW-E2E] [BARGE-IN] interruption triggered by user speech");
 
     // 1. Immediately fast-stop active speech playback
     cancelCurrentSpeech();
@@ -122,6 +127,7 @@ export function useVoiceSession() {
     telemetryRef.current.interruptionCutoffMs = performance.now() - interruptStart;
 
     // 6. Instantly switch session to listening
+    console.log("[VOXFLOW-E2E] [SESSION] state -> interrupted -> listening");
     setSession((prev) => ({
       ...prev,
       state: "listening",
@@ -162,6 +168,7 @@ export function useVoiceSession() {
       cancelCurrentSpeech();
 
       // Set thinking state
+      console.log(`[VOXFLOW-E2E] [SESSION] state -> thinking: requestId=${requestId}`);
       setSession((prev) => ({
         ...prev,
         state: "thinking",
@@ -200,6 +207,7 @@ export function useVoiceSession() {
                     if (managerRef.current) {
                       managerRef.current.setHysteresis(1.6);
                     }
+                    console.log("[VOXFLOW-E2E] [SESSION] state -> speaking");
                     setSession((prev) => ({
                       ...prev,
                       state: "speaking",
@@ -231,9 +239,11 @@ export function useVoiceSession() {
                   },
                   onPlayEnd: () => {
                     telemetryRef.current.playbackCompleted = Date.now();
+                    console.log("[VOXFLOW-E2E] [SESSION] state -> playback completed");
                     if (managerRef.current && managerRef.current.isCapturing()) {
                       // Continuous conversational loop: return to listening for next turn (Desktop)
                       managerRef.current.setHysteresis(1.0);
+                      console.log("[VOXFLOW-E2E] [SESSION] state -> listening (desktop loop)");
                       setSession((prev) => ({
                         ...prev,
                         state: "listening",
@@ -245,6 +255,7 @@ export function useVoiceSession() {
                       if (managerRef.current) {
                         managerRef.current.stopBargeInListening();
                       }
+                      console.log("[VOXFLOW-E2E] [SESSION] state -> idle (android turn ended)");
                       setSession((prev) => ({
                         ...prev,
                         state: "idle",
@@ -318,11 +329,84 @@ export function useVoiceSession() {
                 return updated;
               });
 
-              // Flush remaining buffered text into Rime synthesis
+              // CRITICAL: Ensure any trailing text slice is dispatched to TTS before completeText()
+              const trailingDelta = fullText.slice(previousTextLength);
               if (activeTtsSessionRef.current) {
+                if (trailingDelta) {
+                  console.log(`[VOXFLOW-E2E] [SEGMENTER] appending trailing delta to TTS: length=${trailingDelta.length}`);
+                  activeTtsSessionRef.current.appendTextChunk(trailingDelta);
+                }
                 activeTtsSessionRef.current.completeText();
+              } else if (audioPlayerRef.current && fullText.trim()) {
+                console.log(`[VOXFLOW-E2E] [TTS] initializing TTS session in onDone for full text: length=${fullText.length}`);
+                const tts = new TTSSession(genId || `gen-${Date.now()}`, audioPlayerRef.current, {
+                  onPlayStart: () => {
+                    telemetryRef.current.firstPlaybackStarted = Date.now();
+                    playbackStartTimeRef.current = Date.now();
+                    if (managerRef.current) {
+                      managerRef.current.setHysteresis(1.6);
+                    }
+                    console.log("[VOXFLOW-E2E] [SESSION] state -> speaking");
+                    setSession((prev) => ({
+                      ...prev,
+                      state: "speaking",
+                    }));
+                    if (managerRef.current) {
+                      managerRef.current.startBargeInListening({
+                        deviceId:
+                          audioConfig.selectedInputId !== "default"
+                            ? audioConfig.selectedInputId
+                            : undefined,
+                        noiseSuppression: audioConfig.noiseSuppression,
+                        echoCancellation: audioConfig.echoCancellation,
+                        autoGainControl: audioConfig.autoGainControl,
+                      });
+                    }
+                  },
+                  onAudioLevel: (level) => {
+                    setSession((prev) => ({
+                      ...prev,
+                      audioLevels: {
+                        ...prev.audioLevels,
+                        outputLevel: level,
+                      },
+                    }));
+                  },
+                  onPlayEnd: () => {
+                    telemetryRef.current.playbackCompleted = Date.now();
+                    console.log("[VOXFLOW-E2E] [SESSION] state -> playback completed");
+                    if (managerRef.current && managerRef.current.isCapturing()) {
+                      managerRef.current.setHysteresis(1.0);
+                      console.log("[VOXFLOW-E2E] [SESSION] state -> listening (desktop loop)");
+                      setSession((prev) => ({
+                        ...prev,
+                        state: "listening",
+                        isSessionActive: true,
+                        audioLevels: { ...prev.audioLevels, outputLevel: 0 },
+                      }));
+                    } else {
+                      if (managerRef.current) {
+                        managerRef.current.stopBargeInListening();
+                      }
+                      console.log("[VOXFLOW-E2E] [SESSION] state -> idle (android turn ended)");
+                      setSession((prev) => ({
+                        ...prev,
+                        state: "idle",
+                        isSessionActive: false,
+                        audioLevels: { ...prev.audioLevels, outputLevel: 0 },
+                      }));
+                    }
+                  },
+                  onError: (err) => {
+                    console.warn("[VoiceSession] Rime playback notice:", err.message);
+                  },
+                });
+                activeTtsSessionRef.current = tts;
+                tts.appendTextChunk(fullText);
+                tts.completeText();
               } else {
                 // If no speech session was initiated, return to idle
+                console.log("[VOXFLOW-E2E] [SESSION] state -> idle (no text to speak)");
                 setSession((prev) => ({
                   ...prev,
                   state: "idle",
@@ -340,6 +424,7 @@ export function useVoiceSession() {
                   ? "AI service is temporarily busy. Please try again shortly."
                   : err.message || "VOXFLOW couldn't process that request.";
 
+              console.log("[VOXFLOW-E2E] [SESSION] state -> error:", cleanMsg);
               setSession((prev) => ({
                 ...prev,
                 state: "idle",
@@ -417,6 +502,7 @@ export function useVoiceSession() {
       convManager.abortCurrent();
       activeUserMsgIdRef.current = null;
       setCurrentPartialTranscript("");
+      console.log("[VOXFLOW-E2E] [SESSION] state -> listening");
       setSession((prev) => ({
         ...prev,
         state: "listening",
@@ -436,6 +522,7 @@ export function useVoiceSession() {
     });
 
     const unbindSpeechStart = voiceManager.on("speechStart", () => {
+      console.log("[VOXFLOW-E2E] [STT] speechStart", { timestamp: Date.now() });
       setSession((prev) => ({
         ...prev,
         isSpeaking: true,
@@ -487,9 +574,16 @@ export function useVoiceSession() {
         timestamp: Date.now(),
       });
 
+      if (!chunk.isFinal) {
+        console.log("[VOXFLOW-E2E] [STT] interim transcript:", { text, timestamp: Date.now() });
+      } else {
+        console.log("[VOXFLOW-E2E] [STT] final transcript:", { text, timestamp: Date.now() });
+      }
+
       // Full-duplex barge-in: Only interrupt when assistant is actively SPEAKING audio.
       if (isSpeaking) {
         console.log("[VOXFLOW-BARGEIN] transcript detected while assistant speaking -> stopping Rime immediately:", text);
+        console.log("[VOXFLOW-E2E] [BARGE-IN] speech detected while speaking, triggering interruption:", text);
         handleBargeInRef.current();
       }
 
@@ -624,6 +718,7 @@ export function useVoiceSession() {
             audioLevels: { ...prev.audioLevels, inputLevel: 0 },
           };
         }
+        console.log("[VOXFLOW-E2E] [SESSION] state -> idle (stopped)");
         return {
           ...prev,
           state: "idle",

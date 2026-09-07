@@ -28,6 +28,7 @@ export class ConversationManager {
 
     try {
       console.log(`[CHAT] start requestId=${requestId} generationId=${generationId} turns=${messages.length}`);
+      console.log(`[VOXFLOW-E2E] [GEMINI] request start: requestId=${requestId}, generationId=${generationId}, turns=${messages.length}`);
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -83,6 +84,7 @@ export class ConversationManager {
         // Concurrency guard: check if this generation was superseded
         if (this.currentGenerationId !== generationId) {
           console.log(`[CHAT] generation ${generationId} superseded or aborted`);
+          console.log(`[VOXFLOW-E2E] [GEMINI] abort: generationId=${generationId} superseded`);
           reader.cancel();
           return accumulated;
         }
@@ -92,8 +94,10 @@ export class ConversationManager {
           if (t2 === null) {
             t2 = Date.now();
             console.log(`[CHAT] firstChunk requestId=${requestId} timeToFirstToken=${t2 - t1}ms`);
+            console.log(`[VOXFLOW-E2E] [GEMINI] first token: requestId=${requestId}, ttft=${t2 - t1}ms`);
           }
           accumulated += textChunk;
+          console.log(`[VOXFLOW-E2E] [GEMINI] chunk received: chunkSize=${textChunk.length}, totalSoFar=${accumulated.length}`);
           callbacks.onChunk(accumulated, generationId);
         }
       }
@@ -102,6 +106,7 @@ export class ConversationManager {
       if (this.currentGenerationId === generationId) {
         const t3 = Date.now();
         console.log(`[CHAT] streamComplete requestId=${requestId} totalTime=${t3 - t1}ms length=${accumulated.length}`);
+        console.log(`[VOXFLOW-E2E] [GEMINI] stream end: requestId=${requestId}, generationId=${generationId}, totalTime=${t3 - t1}ms, totalLength=${accumulated.length}`);
         callbacks.onDone(accumulated, generationId);
       }
 
@@ -109,11 +114,13 @@ export class ConversationManager {
     } catch (err: any) {
       if (err.name === "AbortError" || this.currentGenerationId !== generationId) {
         // Generation was cancelled cleanly
+        console.log(`[VOXFLOW-E2E] [GEMINI] abort: generationId=${generationId}`);
         return accumulated;
       }
 
       const cleanError =
         err instanceof Error ? err : new Error("VOXFLOW couldn't process that request.");
+      console.error(`[VOXFLOW-E2E] [GEMINI] stream error: requestId=${requestId}, error=${cleanError.message}`);
       callbacks.onError(cleanError, generationId);
       throw cleanError;
     } finally {
@@ -125,6 +132,7 @@ export class ConversationManager {
 
   public abortCurrent(): void {
     if (this.abortController) {
+      console.log(`[VOXFLOW-E2E] [GEMINI] abortCurrent called for generationId=${this.currentGenerationId}`);
       try {
         this.abortController.abort();
       } catch {
