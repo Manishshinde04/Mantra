@@ -441,14 +441,22 @@ export function useVoiceSession() {
         isSpeaking: true,
       }));
 
-      // Full-duplex barge-in: Only interrupt when assistant is actively SPEAKING audio.
-      // Guard against false triggers during the first 250ms of speaker playback startup
-      if (sessionStateRef.current === "speaking") {
-        if (Date.now() - playbackStartTimeRef.current > 250) {
-          console.log("[VOXFLOW-BARGEIN] speechStart detected while assistant speaking -> stopping Rime immediately");
-          handleBargeInRef.current();
-        }
-      }
+      const isSpeaking = sessionStateRef.current === "speaking";
+
+      // BARGE-IN SAFETY:
+      // While the assistant is actively speaking through device speakers, raw audio energy
+      // (VAD / onspeechstart) is triggered by the speaker audio itself (acoustic echo).
+      // Therefore, raw speechStart MUST NOT interrupt playback.
+      // Interruption is exclusively triggered when actual USER words are transcribed in unbindTranscript.
+      console.log("[VOXFLOW-BARGE]", {
+        assistantSpeaking: isSpeaking,
+        speechDetected: true,
+        interruptionTriggered: false,
+        reason: isSpeaking
+          ? "Acoustic activity detected during assistant playback; ignored to prevent self-interruption. Waiting for user speech transcript."
+          : "speechStart during non-speaking state",
+        timestamp: Date.now(),
+      });
     });
 
     const unbindSpeechEnd = voiceManager.on("speechEnd", () => {
@@ -462,6 +470,17 @@ export function useVoiceSession() {
       const text = chunk.text.trim();
       if (!text) return;
 
+      const isSpeaking = sessionStateRef.current === "speaking";
+      console.log("[VOXFLOW-BARGE]", {
+        assistantSpeaking: isSpeaking,
+        speechDetected: true,
+        interruptionTriggered: isSpeaking,
+        reason: isSpeaking
+          ? `transcript detected while assistant speaking: "${text}"`
+          : `transcript received: "${text}"`,
+        timestamp: Date.now(),
+      });
+
       console.log("[VOXFLOW-MIC] H. TRANSCRIPT:", {
         isFinal: chunk.isFinal,
         text,
@@ -469,7 +488,7 @@ export function useVoiceSession() {
       });
 
       // Full-duplex barge-in: Only interrupt when assistant is actively SPEAKING audio.
-      if (sessionStateRef.current === "speaking") {
+      if (isSpeaking) {
         console.log("[VOXFLOW-BARGEIN] transcript detected while assistant speaking -> stopping Rime immediately:", text);
         handleBargeInRef.current();
       }
