@@ -34,6 +34,7 @@ export interface TranscriptChunk {
   text: string;
   isFinal: boolean;
   timestamp: number;
+  isCandidate?: boolean;
 }
 
 export interface VoiceInputEvents {

@@ -40,4 +40,5 @@ export interface TTSSessionCallbacks {
   onAudioLevel: (level: number) => void;
   onPlayEnd: (generationId: string) => void;
   onError: (error: Error, generationId: string) => void;
+  onInterSentenceWindow?: (active: boolean) => void;
 }

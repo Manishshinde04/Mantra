@@ -285,6 +285,28 @@ export class AudioPlayer {
     return this.isPlaying;
   }
 
+  public isAudioElementPaused(): boolean {
+    return this.audioElement ? this.audioElement.paused : true;
+  }
+
+  public pausePlayback(): void {
+    if (this.audioElement && this.isPlaying) {
+      try {
+        this.audioElement.pause();
+        this.stopLevelAnimation();
+      } catch {}
+    }
+  }
+
+  public resumePlayback(): void {
+    if (this.audioElement && this.isPlaying) {
+      try {
+        void this.audioElement.play();
+        this.startLevelAnimation();
+      } catch {}
+    }
+  }
+
   public getCurrentItem(): AudioQueueItem | null {
     return this.currentItem;
   }

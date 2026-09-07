@@ -65,10 +65,26 @@ export function useVoiceSession() {
   // Track in-flight generation state to strictly prevent duplicate submissions
   const isGeneratingRef = useRef<boolean>(false);
 
+  // Android Acoustic Silence Verification Refs
+  const androidCandidateRef = useRef<{
+    initialText: string;
+    timestamp: number;
+    confirmed: boolean;
+  } | null>(null);
+  const androidVerificationTimerRef = useRef<any>(null);
+
   // Cancel any active Rime speech, playback, and queued audio
   const cancelCurrentSpeech = useCallback(() => {
     isGeneratingRef.current = false;
     console.log("[VOXFLOW-E2E] [BARGE-IN] Rime stop, queue purge, generation invalidated");
+    if (androidVerificationTimerRef.current) {
+      clearTimeout(androidVerificationTimerRef.current);
+      androidVerificationTimerRef.current = null;
+    }
+    androidCandidateRef.current = null;
+    if (managerRef.current) {
+      managerRef.current.setTTSPlaying(false);
+    }
     if (activeTtsSessionRef.current) {
       activeTtsSessionRef.current.cancel();
       activeTtsSessionRef.current = null;
@@ -206,6 +222,7 @@ export function useVoiceSession() {
                     playbackStartTimeRef.current = Date.now();
                     if (managerRef.current) {
                       managerRef.current.setHysteresis(1.6);
+                      managerRef.current.setTTSPlaying(true);
                     }
                     console.log("[VOXFLOW-E2E] [SESSION] state -> speaking");
                     setSession((prev) => ({
@@ -215,7 +232,6 @@ export function useVoiceSession() {
 
                     // HANDS-FREE BARGE-IN:
                     // Enable SpeechRecognition barge-in window when assistant starts speaking
-                    // so the user can interrupt hands-free without touching the mic button!
                     if (managerRef.current) {
                       managerRef.current.startBargeInListening({
                         deviceId:
@@ -239,6 +255,9 @@ export function useVoiceSession() {
                   },
                   onPlayEnd: () => {
                     telemetryRef.current.playbackCompleted = Date.now();
+                    if (managerRef.current) {
+                      managerRef.current.setTTSPlaying(false);
+                    }
                     console.log("[VOXFLOW-E2E] [SESSION] state -> playback completed");
                     if (managerRef.current && managerRef.current.isCapturing()) {
                       // Continuous conversational loop: return to listening for next turn (Desktop)
@@ -262,6 +281,15 @@ export function useVoiceSession() {
                         isSessionActive: false,
                         audioLevels: { ...prev.audioLevels, outputLevel: 0 },
                       }));
+                    }
+                  },
+                  onInterSentenceWindow: (active) => {
+                    if (managerRef.current) {
+                      if (active) {
+                        managerRef.current.startInterruptionListeningWindow(450);
+                      } else {
+                        managerRef.current.stopInterruptionListeningWindow();
+                      }
                     }
                   },
                   onError: (err) => {
@@ -345,6 +373,7 @@ export function useVoiceSession() {
                     playbackStartTimeRef.current = Date.now();
                     if (managerRef.current) {
                       managerRef.current.setHysteresis(1.6);
+                      managerRef.current.setTTSPlaying(true);
                     }
                     console.log("[VOXFLOW-E2E] [SESSION] state -> speaking");
                     setSession((prev) => ({
@@ -374,6 +403,9 @@ export function useVoiceSession() {
                   },
                   onPlayEnd: () => {
                     telemetryRef.current.playbackCompleted = Date.now();
+                    if (managerRef.current) {
+                      managerRef.current.setTTSPlaying(false);
+                    }
                     console.log("[VOXFLOW-E2E] [SESSION] state -> playback completed");
                     if (managerRef.current && managerRef.current.isCapturing()) {
                       managerRef.current.setHysteresis(1.0);
@@ -395,6 +427,15 @@ export function useVoiceSession() {
                         isSessionActive: false,
                         audioLevels: { ...prev.audioLevels, outputLevel: 0 },
                       }));
+                    }
+                  },
+                  onInterSentenceWindow: (active) => {
+                    if (managerRef.current) {
+                      if (active) {
+                        managerRef.current.startInterruptionListeningWindow(450);
+                      } else {
+                        managerRef.current.stopInterruptionListeningWindow();
+                      }
                     }
                   },
                   onError: (err) => {
@@ -580,11 +621,99 @@ export function useVoiceSession() {
         console.log("[VOXFLOW-E2E] [STT] final transcript:", { text, timestamp: Date.now() });
       }
 
-      // Full-duplex barge-in: Only interrupt when assistant is actively SPEAKING audio.
+      const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+
+      // Barge-in validation
       if (isSpeaking) {
-        console.log("[VOXFLOW-BARGEIN] transcript detected while assistant speaking -> stopping Rime immediately:", text);
-        console.log("[VOXFLOW-E2E] [BARGE-IN] speech detected while speaking, triggering interruption:", text);
-        handleBargeInRef.current();
+        if (!isAndroid) {
+          // Desktop: 100% full-duplex with hardware echo cancellation (UNCHANGED)
+          console.log("[VOXFLOW-BARGEIN] transcript detected while assistant speaking -> stopping Rime immediately:", text);
+          console.log("[VOXFLOW-E2E] [BARGE-IN] speech detected while speaking, triggering interruption:", text);
+          handleBargeInRef.current();
+        } else {
+          // Android: Validate candidate echo vs genuine user speech
+          if (!chunk.isCandidate) {
+            // Arrived during silent INTERRUPTION_LISTENING window: 100% genuine user speech
+            console.log("[VOXFLOW-ANDROID-ECHO] acceptedInterruption", {
+              timestamp: Date.now(),
+              currentState: "INTERRUPTION_LISTENING",
+              ttsPlaying: false,
+              recognitionState: "running",
+              transcript: text,
+              accepted: true,
+              reason: "Interruption received during silent inter-sentence window",
+            });
+            handleBargeInRef.current();
+          } else {
+            // Candidate received while TTS audio is playing: verify against acoustic echo
+            console.log("[VOXFLOW-ANDROID-ECHO] candidateInterruption", {
+              timestamp: Date.now(),
+              currentState: "SPEAKING",
+              ttsPlaying: true,
+              recognitionState: "running",
+              transcript: text,
+              reason: "Transcript received during active TTS playback; performing acoustic silence verification",
+            });
+
+            // If we are already verifying a candidate and user continuation speech arrives
+            if (androidCandidateRef.current && !androidCandidateRef.current.confirmed) {
+              androidCandidateRef.current.confirmed = true;
+              if (androidVerificationTimerRef.current) {
+                clearTimeout(androidVerificationTimerRef.current);
+                androidVerificationTimerRef.current = null;
+              }
+              console.log("[VOXFLOW-ANDROID-ECHO] acceptedInterruption", {
+                timestamp: Date.now(),
+                currentState: "SPEAKING",
+                ttsPlaying: true,
+                recognitionState: "running",
+                transcript: text,
+                accepted: true,
+                reason: "Continuation speech confirmed during verification pause",
+              });
+              androidCandidateRef.current = null;
+              handleBargeInRef.current();
+            } else {
+              // Pause audio to silence the speaker
+              if (audioPlayerRef.current) {
+                audioPlayerRef.current.pausePlayback();
+              }
+              androidCandidateRef.current = {
+                initialText: text,
+                timestamp: Date.now(),
+                confirmed: false,
+              };
+
+              if (androidVerificationTimerRef.current) {
+                clearTimeout(androidVerificationTimerRef.current);
+              }
+
+              androidVerificationTimerRef.current = setTimeout(() => {
+                androidVerificationTimerRef.current = null;
+                const cand = androidCandidateRef.current;
+                if (!cand || cand.confirmed) return;
+
+                console.log("[VOXFLOW-ANDROID-ECHO] ignoredSelfCapture", {
+                  timestamp: Date.now(),
+                  currentState: "SPEAKING",
+                  ttsPlaying: true,
+                  recognitionState: "running",
+                  transcript: cand.initialText,
+                  accepted: false,
+                  reason: "Acoustic echo ceased immediately upon audio pause; no continuing user speech detected",
+                });
+
+                androidCandidateRef.current = null;
+                if (audioPlayerRef.current) {
+                  audioPlayerRef.current.resumePlayback();
+                }
+              }, 350);
+
+              // Candidate is awaiting verification: DO NOT emit to UI or trigger response yet
+              return;
+            }
+          }
+        }
       }
 
       if (!chunk.isFinal) {
@@ -747,6 +876,11 @@ export function useVoiceSession() {
       voiceManager.dispose();
       convManager.abortCurrent();
       player.dispose();
+      if (androidVerificationTimerRef.current) {
+        clearTimeout(androidVerificationTimerRef.current);
+        androidVerificationTimerRef.current = null;
+      }
+      androidCandidateRef.current = null;
       if (activeTtsSessionRef.current) {
         activeTtsSessionRef.current.cancel();
       }

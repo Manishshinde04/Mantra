@@ -36,6 +36,7 @@ export class TTSSession {
   private audioPlayedCount: number = 0;
 
   private previousAudioEndedAt: number = 0;
+  private interSentenceTimer: any = null;
 
   constructor(generationId: string, player: AudioPlayer, callbacks: TTSSessionCallbacks) {
     this.generationId = generationId;
@@ -119,6 +120,11 @@ export class TTSSession {
       this.abortController = null;
     }
 
+    if (this.interSentenceTimer) {
+      clearTimeout(this.interSentenceTimer);
+      this.interSentenceTimer = null;
+    }
+
     this.player.fastStop();
     this.audioBlobs.clear();
     this.sentences = [];
@@ -172,6 +178,26 @@ export class TTSSession {
       generationId: this.generationId,
       timestamp: now,
     });
+
+    const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+    const hasMoreSentences = this.nextPlayIndex < this.sentences.length || !this.isTextComplete;
+
+    // On Android: open controlled inter-sentence silent listening window before next audio item
+    if (isAndroid && hasMoreSentences) {
+      this.callbacks.onInterSentenceWindow?.(true);
+      if (this.interSentenceTimer) {
+        clearTimeout(this.interSentenceTimer);
+      }
+      this.interSentenceTimer = setTimeout(() => {
+        this.interSentenceTimer = null;
+        if (this.abortController?.signal.aborted || this.queueState === "INTERRUPTED") return;
+        this.callbacks.onInterSentenceWindow?.(false);
+        this.pumpPlayback();
+        this.pumpSynthesis();
+        this.checkSessionDrain();
+      }, 450);
+      return;
+    }
 
     // Continue playback with next sequential sentence
     this.pumpPlayback();

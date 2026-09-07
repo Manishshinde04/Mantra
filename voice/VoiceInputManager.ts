@@ -30,6 +30,16 @@ export class VoiceInputManager {
   private initToken: number = 0;
   private isInitializing: boolean = false;
 
+  // Android Echo & Interruption State Machine
+  private isTTSPlaying: boolean = false;
+  private androidSpeechState:
+    | "IDLE"
+    | "LISTENING"
+    | "THINKING"
+    | "SPEAKING"
+    | "INTERRUPTION_LISTENING"
+    | "BARGE_IN" = "IDLE";
+
   constructor(vadConfig?: VADConfig) {
     this.audioCapture = new AudioCapture();
     this.vad = new VoiceActivityDetector(vadConfig);
@@ -65,6 +75,10 @@ export class VoiceInputManager {
     this.isExplicitlyStopped = false;
     this.consecutiveRestarts = 0;
     this.configuredLanguage = config.language;
+    if (isAndroid) {
+      this.androidSpeechState = "LISTENING";
+      this.isTTSPlaying = false;
+    }
 
     if (this.restartTimeout) {
       clearTimeout(this.restartTimeout);
@@ -100,10 +114,108 @@ export class VoiceInputManager {
   }
 
   /**
+   * Sets the active TTS playback status to coordinate Android microphone listening
+   */
+  public setTTSPlaying(playing: boolean): void {
+    const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+    this.isTTSPlaying = playing;
+    if (isAndroid) {
+      if (playing) {
+        console.log("[VOXFLOW-ANDROID-ECHO] ttsStart", {
+          timestamp: Date.now(),
+          ttsPlaying: true,
+          speechRecognitionState: this.isRecognitionRunning ? "running" : "stopped",
+          currentState: this.androidSpeechState,
+        });
+        // When Android assistant TTS starts, temporarily stop/pause Android SpeechRecognition
+        // so it cannot recognize the assistant's own output!
+        if (this.speechRecognizer) {
+          try {
+            this.speechRecognizer.onend = null;
+            this.speechRecognizer.onerror = null;
+            this.speechRecognizer.abort();
+          } catch {}
+          this.speechRecognizer = null;
+          this.isRecognitionRunning = false;
+          this.isRecognitionStarting = false;
+          console.log("[VOXFLOW-ANDROID-ECHO] recognitionStop", {
+            reason: "Paused for assistant TTS playback onset",
+            timestamp: Date.now(),
+            ttsPlaying: true,
+            speechRecognitionState: "stopped",
+          });
+        }
+        this.androidSpeechState = "SPEAKING";
+      } else {
+        console.log("[VOXFLOW-ANDROID-ECHO] ttsStop", {
+          timestamp: Date.now(),
+          ttsPlaying: false,
+          speechRecognitionState: this.isRecognitionRunning ? "running" : "stopped",
+          currentState: this.androidSpeechState,
+        });
+      }
+    }
+  }
+
+  /**
+   * Android Controlled Interruption Listening Window:
+   * Activated during inter-sentence pauses or cadenced intervals where the speaker is silent.
+   */
+  public startInterruptionListeningWindow(durationMs: number = 500): void {
+    const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+    if (!isAndroid || this.isExplicitlyStopped) return;
+
+    this.androidSpeechState = "INTERRUPTION_LISTENING";
+    this.isBargeInActive = true;
+    this.state = "listening";
+
+    console.log("[VOXFLOW-ANDROID-ECHO] speechRecognitionState: INTERRUPTION_LISTENING", {
+      timestamp: Date.now(),
+      ttsPlaying: this.isTTSPlaying,
+      durationMs,
+    });
+    console.log("[VOXFLOW-ANDROID-ECHO] recognitionStart", {
+      timestamp: Date.now(),
+      state: "INTERRUPTION_LISTENING",
+      ttsPlaying: this.isTTSPlaying,
+    });
+
+    this.startSpeechRecognitionSafely(performance.now());
+  }
+
+  /**
+   * Closes the Android Interruption Listening Window before the next sentence begins playback
+   */
+  public stopInterruptionListeningWindow(): void {
+    const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+    if (!isAndroid) return;
+
+    if (this.androidSpeechState === "INTERRUPTION_LISTENING") {
+      this.androidSpeechState = "SPEAKING";
+      if (this.speechRecognizer) {
+        try {
+          this.speechRecognizer.onend = null;
+          this.speechRecognizer.onerror = null;
+          this.speechRecognizer.abort();
+        } catch {}
+        this.speechRecognizer = null;
+        this.isRecognitionRunning = false;
+        this.isRecognitionStarting = false;
+        console.log("[VOXFLOW-ANDROID-ECHO] recognitionStop", {
+          reason: "Interruption window elapsed; preparing next audio sentence",
+          timestamp: Date.now(),
+          state: "SPEAKING",
+          ttsPlaying: this.isTTSPlaying,
+        });
+      }
+    }
+  }
+
+  /**
    * Android Hands-Free Barge-In:
    * Called when assistant begins SPEAKING audio.
-   * Starts SpeechRecognition (and ONLY SpeechRecognition) so the user can interrupt hands-free.
-   * Zero getUserMedia, zero AudioContext, zero VAD.
+   * Desktop: keeps full-duplex capture active.
+   * Android: explicitly marks state as SPEAKING without blindly running recognition.
    */
   public startBargeInListening(config: AudioCaptureConfig = {}): void {
     const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
@@ -122,24 +234,26 @@ export class VoiceInputManager {
     this.isBargeInActive = true;
     this.configuredLanguage = config.language;
     this.consecutiveRestarts = 0;
+    this.androidSpeechState = "SPEAKING";
 
-    if (this.isRecognitionRunning || this.isRecognitionStarting) {
-      console.log("[VOXFLOW-ANDROID] BARGE-IN: SpeechRecognition already active for barge-in");
-      return;
-    }
-
-    this.state = "listening";
-    console.log("[VOXFLOW-ANDROID] BARGE-IN LISTENING started (SpeechRecognition ONLY, getUserMedia: false)");
-    this.startSpeechRecognitionSafely(performance.now());
+    console.log("[VOXFLOW-ANDROID-ECHO] speechRecognitionState: SPEAKING", {
+      timestamp: Date.now(),
+      ttsPlaying: this.isTTSPlaying,
+      note: "Android SpeechRecognition paused for TTS onset; waiting for controlled listening window",
+    });
   }
 
   /**
-   * Called when barge-in is triggered by user speech to claim the turn.
+   * Called when barge-in is triggered by genuine user speech to claim the turn.
    */
   public onBargeInTriggered(): void {
     this.isBargeInActive = false;
     this.state = "listening";
-    console.log("[VOXFLOW-ANDROID] BARGE-IN TRIGGERED: user claimed turn, capturing full utterance");
+    this.androidSpeechState = "BARGE_IN";
+    console.log("[VOXFLOW-ANDROID-ECHO] speechRecognitionState: BARGE_IN", {
+      timestamp: Date.now(),
+      note: "User claimed turn, capturing full utterance",
+    });
   }
 
   /**
@@ -150,6 +264,8 @@ export class VoiceInputManager {
     this.isBargeInActive = false;
     const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
     if (isAndroid) {
+      this.androidSpeechState = "IDLE";
+      this.isTTSPlaying = false;
       if (this.speechRecognizer) {
         try {
           this.speechRecognizer.onend = null;
@@ -162,7 +278,10 @@ export class VoiceInputManager {
       this.isRecognitionStarting = false;
       this.state = "idle";
       this.emitter.emit("stop");
-      console.log("[VOXFLOW-ANDROID] BARGE-IN LISTENING ended normally (playback complete, now idle)");
+      console.log("[VOXFLOW-ANDROID-ECHO] speechRecognitionState: IDLE", {
+        timestamp: Date.now(),
+        note: "Playback complete, now idle",
+      });
     }
   }
 
@@ -481,22 +600,52 @@ export class VoiceInputManager {
 
         if (trimmedFinal) {
           if (isAndroid) {
+            console.log("[VOXFLOW-ANDROID-ECHO] recognitionResult", {
+              final: trimmedFinal,
+              timestamp: Date.now(),
+              currentState: this.androidSpeechState,
+              ttsPlaying: this.isTTSPlaying,
+            });
+            const isInterruptionListening = this.androidSpeechState === "INTERRUPTION_LISTENING";
+            const isCandidate = this.isTTSPlaying || (!isInterruptionListening && this.androidSpeechState === "SPEAKING");
+
             this.isBargeInActive = false;
             this.emitter.emit("audioLevel", 0);
+            this.emitter.emit("transcript", {
+              text: trimmedFinal,
+              isFinal: true,
+              timestamp: Date.now(),
+              isCandidate,
+            });
+            this.emitter.emit("speechEnd");
+            return;
           }
           this.emitter.emit("transcript", {
             text: trimmedFinal,
             isFinal: true,
             timestamp: Date.now(),
           });
-          if (isAndroid) {
-            this.emitter.emit("speechEnd");
-          }
         } else if (trimmedInterim) {
           if (isAndroid) {
+            console.log("[VOXFLOW-ANDROID-ECHO] recognitionResult", {
+              interim: trimmedInterim,
+              timestamp: Date.now(),
+              currentState: this.androidSpeechState,
+              ttsPlaying: this.isTTSPlaying,
+            });
+            const isInterruptionListening = this.androidSpeechState === "INTERRUPTION_LISTENING";
+            const isCandidate = this.isTTSPlaying || (!isInterruptionListening && this.androidSpeechState === "SPEAKING");
+
             this.isBargeInActive = false;
             this.emitter.emit("speechStart");
             this.emitter.emit("audioLevel", 0.65);
+            this.emitter.emit("transcript", {
+              text: trimmedInterim,
+              isFinal: false,
+              timestamp: Date.now(),
+              isCandidate,
+            });
+            return;
           }
           this.emitter.emit("transcript", {
             text: trimmedInterim,
@@ -549,6 +698,7 @@ export class VoiceInputManager {
           this.isRecognitionStarting = false;
           if (errCode === "not-allowed") {
             this.isBargeInActive = false;
+            this.androidSpeechState = "IDLE";
             this.state = "error";
             this.emitter.emit("error", {
               type: "permission-denied",
@@ -558,14 +708,15 @@ export class VoiceInputManager {
             this.stop();
             return;
           }
-          // On Android: silence timeout (no-speech) during barge-in listening is expected; onend will renew
-          if (errCode === "no-speech" && this.isBargeInActive && !this.isExplicitlyStopped) {
+          // On Android: silence timeout (no-speech) during barge-in listening is expected
+          if (errCode === "no-speech" && (this.androidSpeechState === "INTERRUPTION_LISTENING" || this.isBargeInActive) && !this.isExplicitlyStopped) {
             return;
           }
           if (errCode === "audio-capture" || errCode === "no-speech" || errCode === "aborted") {
             this.isBargeInActive = false;
-            if (this.state === "listening") {
+            if (this.state === "listening" && this.androidSpeechState !== "INTERRUPTION_LISTENING" && this.androidSpeechState !== "SPEAKING") {
               this.state = "idle";
+              this.androidSpeechState = "IDLE";
               this.emitter.emit("stop");
             }
             return;
@@ -595,6 +746,7 @@ export class VoiceInputManager {
           activeGen: this.recognitionGeneration,
           platform: isAndroid ? "Android" : "Desktop",
           isBargeInActive: this.isBargeInActive,
+          androidSpeechState: this.androidSpeechState,
         });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onend", {
           gen,
@@ -610,16 +762,21 @@ export class VoiceInputManager {
         // Android lifecycle:
         if (isAndroid) {
           this.speechRecognizer = null;
-          // If assistant is still speaking and barge-in is active, renew the listening window
-          if (this.isBargeInActive && this.state === "listening" && !this.isExplicitlyStopped) {
-            console.log("[VOXFLOW-ANDROID] onend during assistant speech -> renewing barge-in SpeechRecognition window");
-            this.startSpeechRecognitionSafely();
-            return;
-          }
+          console.log("[VOXFLOW-ANDROID-ECHO] recognitionEnd", {
+            timestamp: Date.now(),
+            currentState: this.androidSpeechState,
+            ttsPlaying: this.isTTSPlaying,
+            isBargeInActive: this.isBargeInActive,
+          });
 
           // Single utterance lifecycle ended:
-          if (this.state === "listening") {
+          if (
+            this.state === "listening" &&
+            this.androidSpeechState !== "INTERRUPTION_LISTENING" &&
+            this.androidSpeechState !== "SPEAKING"
+          ) {
             this.state = "idle";
+            this.androidSpeechState = "IDLE";
             this.emitter.emit("stop");
           }
           return;
