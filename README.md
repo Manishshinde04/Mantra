@@ -1,150 +1,168 @@
 🎙️ MANTRA
 
-A real-time, multilingual AI voice assistant built for natural, low-latency conversations.
+A real-time, multilingual AI voice assistant designed for natural, low-latency conversations.
 
-Mantra is a modern AI voice assistant that enables users to communicate naturally through speech. It combines speech recognition, Gemini-powered response generation, intelligent text segmentation, and real-time text-to-speech playback into a seamless conversational experience.
+MANTRA is an advanced conversational voice assistant that combines speech recognition, Gemini AI, intelligent response streaming, real-time text-to-speech, audio queue management, and interruption handling into one seamless voice experience.
 
-🌐 Live Website
+🌐 Live Demo
 
-https://voxflow-lime.vercel.app/
+👉 https://voxflow-lime.vercel.app/
 
-The deployed URL is retained for the current production deployment, while the project/product name is now MANTRA.
+✨ Key Features
 
-✨ Features
+🎤 Real-time voice conversations
 
-🎤 Real-Time Voice Interaction — Speak naturally and receive spoken responses.
+🤖 Gemini-powered AI responses
 
-🤖 Gemini AI Responses — Streaming AI-generated conversational responses.
+🔊 Streaming text-to-speech with Rime
 
-🔊 Low-Latency Text-to-Speech — Responses are segmented and synthesized progressively.
+⚡ Low-latency first-audio response
 
-⚡ Fast First Audio — Early clause segmentation reduces time-to-first-audio.
+🗣️ Natural barge-in / interruption support
 
-🗣️ Hands-Free Barge-In — Users can interrupt the assistant while it is speaking.
+🌍 Multilingual voice interaction
 
-🌍 Multilingual Support — Supports language selection and Devanagari sentence boundaries.
+🇮🇳 Hindi & Marathi Devanagari sentence support
 
-📱 Android Support — Dedicated mobile speech-recognition flow for reliable microphone activation.
+📱 Android-optimized speech recognition
 
-🖥️ Desktop Support — Full-duplex voice interaction with VAD and audio visualization.
+🖥️ Desktop full-duplex voice interaction
 
-🛡️ Playback Watchdog — Prevents audio stalls from freezing the conversation.
+🛡️ Audio playback watchdog and recovery
 
-📊 End-to-End Telemetry — Structured logging across STT, Gemini, TTS, queue, session, and interruption flows.
+📊 End-to-end voice pipeline telemetry
+
+🔄 Stable multi-turn conversations
 
 🧠 How MANTRA Works
 
-             ┌──────────────────────┐
-             │      USER SPEECH     │
-             └──────────┬───────────┘
-                        │
-                        ▼
-             ┌──────────────────────┐
-             │ Speech Recognition   │
-             │       + VAD          │
-             └──────────┬───────────┘
-                        │
-                        ▼
-             ┌──────────────────────┐
-             │   Gemini AI Engine   │
-             │   Streaming Reply   │
-             └──────────┬───────────┘
-                        │
-                        ▼
-             ┌──────────────────────┐
-             │ Sentence / Clause    │
-             │     Segmenter        │
-             └──────────┬───────────┘
-                        │
-                        ▼
-             ┌──────────────────────┐
-             │      Rime TTS        │
-             │   Streaming Audio    │
-             └──────────┬───────────┘
-                        │
-                        ▼
-             ┌──────────────────────┐
-             │   Audio Playback     │
-             │   + Barge-In Control │
-             └──────────────────────┘
+                    ┌─────────────────┐
+                    │      USER       │
+                    │     SPEAKS      │
+                    └────────┬────────┘
+                             │
+                             ▼
+                  ┌─────────────────────┐
+                  │ Speech Recognition  │
+                  │       + VAD         │
+                  └──────────┬──────────┘
+                             │
+                             ▼
+                  ┌─────────────────────┐
+                  │     GEMINI AI       │
+                  │ Streaming Response  │
+                  └──────────┬──────────┘
+                             │
+                             ▼
+                  ┌─────────────────────┐
+                  │ Sentence / Clause   │
+                  │     Segmenter       │
+                  └──────────┬──────────┘
+                             │
+                             ▼
+                  ┌─────────────────────┐
+                  │      RIME TTS       │
+                  │  Streaming Audio    │
+                  └──────────┬──────────┘
+                             │
+                             ▼
+                  ┌─────────────────────┐
+                  │   Audio Playback    │
+                  │   + Barge-In        │
+                  └──────────┬──────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   LISTEN AGAIN  │
+                    └─────────────────┘
 
 🏗️ Technical Architecture
 
-MANTRA uses a real-time conversational pipeline designed to minimize latency and prevent dropped audio or incomplete responses.
+MANTRA is built around a real-time voice pipeline:
 
-Voice Input
+1. Voice Input
 
 Browser Speech Recognition
 
-Audio capture and analyser pipeline
+Microphone handling
 
-Voice Activity Detection (VAD)
+Voice Activity Detection
 
-Platform-specific startup handling
+Audio analyser
 
-Synchronous microphone activation on user gestures
+Desktop and Android-specific voice flows
 
-AI Processing
+2. AI Processing
 
-Gemini streaming response generation
-
-Incremental transcript processing
-
-Trailing response-delta handling
+Gemini streaming responses
 
 Conversation/session management
 
-Voice Output
+Incremental response handling
 
-Intelligent sentence and clause segmentation
+Trailing response-delta protection
 
-Rime Text-to-Speech
+3. Text Processing
 
-Bounded concurrent TTS requests
+Sentence segmentation
+
+Early clause segmentation
+
+Hindi/Marathi । and ॥ boundary support
+
+Streaming text-to-speech chunk preparation
+
+4. Voice Output
+
+Rime TTS
+
+Concurrent TTS fetching
 
 Audio queue management
 
-Playback watchdog and recovery
+Playback watchdog
 
-Immediate interruption / queue purge
+Fast interruption and queue purge
 
 ⚡ Performance Optimizations
 
-MANTRA includes several optimizations for real-time voice interaction:
+Area
 
 Optimization
 
-Result
+First Audio
 
-First-clause segmentation
+Early clause segmentation
 
-Faster first audio
+TTS
 
-Bounded TTS concurrency
+Bounded concurrent requests
 
-Reduces playback starvation and rate-limit pressure
+Playback
 
-Audio playback watchdog
+Duration-based watchdog
 
-Prevents stalled audio from freezing sessions
+Streaming
 
-Trailing stream flush
+Trailing delta flush
 
-Prevents generated text from being lost
+Languages
 
-Devanagari boundaries
+Devanagari sentence boundaries
 
-Better Hindi/Marathi sentence segmentation
+Android
 
-Synchronous mobile STT startup
+Synchronous speech-recognition startup
 
-Reliable Android microphone activation
+Interruption
 
-Barge-in handling
+Fast audio cutoff and queue purge
 
-Fast interruption of assistant speech
+Debugging
 
-Measured Improvements
+Structured end-to-end telemetry
+
+Before vs After
 
 Metric
 
@@ -176,35 +194,33 @@ Interruption Cutoff
 
 <30 ms
 
-📱 Platform Verification
+📱 Platform Support
 
-Desktop
+🖥️ Desktop
 
-Full-duplex audio capture
+Full-duplex voice architecture
 
-Speech recognition
+Speech Recognition
 
 VAD
 
 Audio analyser
 
-Hands-free interruption
+Hands-free barge-in
 
 Continuous conversational loop
 
-Android
+📱 Android
 
-Isolated Speech Recognition
+Isolated Speech Recognition flow
 
 continuous=false
 
-No unnecessary getUserMedia dependency for STT
+User-gesture-based microphone activation
 
-No unnecessary AudioContext dependency for STT
+Reliable voice input
 
-Reliable user-gesture microphone activation
-
-Clean return to listening after assistant playback
+Clean transition between speaking and listening
 
 🛠️ Technology Stack
 
@@ -215,10 +231,6 @@ Technology
 Frontend
 
 Next.js, React, TypeScript
-
-Styling / UI
-
-Modern responsive web UI
 
 AI
 
@@ -244,7 +256,7 @@ Deployment
 
 Vercel
 
-📂 Important Components
+📂 Core Components
 
 src/
 ├── ai/
@@ -261,120 +273,105 @@ src/
     ├── TTSSession.ts
     └── sentenceSegmenter.ts
 
-Core Responsibilities
+Responsibilities
 
-ConversationManager.ts — Gemini streaming and conversation control.
+ConversationManager.ts
 
-useVoiceSession.ts — Main voice-session lifecycle and coordination.
+Gemini streaming
 
-VoiceInputManager.ts — Speech recognition and microphone flow.
+Conversation control
 
-sentenceSegmenter.ts — Splits streamed AI text into TTS-ready chunks.
+Response generation
 
-TTSSession.ts — Manages TTS requests, queueing, and session states.
+useVoiceSession.ts
 
-AudioPlayer.ts — Handles audio playback, interruption, and recovery.
+Voice-session lifecycle
 
-🔄 Voice Conversation Flow
+STT → AI → TTS coordination
 
-User taps / activates microphone
-            ↓
-Speech Recognition starts
-            ↓
-User speaks
-            ↓
-Transcript generated
-            ↓
-Gemini receives final transcript
-            ↓
-Gemini streams response
-            ↓
-Response is segmented progressively
-            ↓
-Rime synthesizes audio
-            ↓
-Audio plays immediately
-            ↓
-User can interrupt at any time
-            ↓
-MANTRA returns to listening
+Interruption handling
 
-🧪 Testing & Verification
+VoiceInputManager.ts
 
-The project was tested for:
+Speech recognition
 
-TypeScript compilation
+Microphone startup
 
-Production build
+Voice input management
 
-Desktop voice interaction
+sentenceSegmenter.ts
 
-Android voice interaction
+Sentence detection
 
-Long AI responses
+Clause segmentation
 
-Multiple consecutive voice turns
+Devanagari punctuation handling
 
-Audio interruption / barge-in
+TTSSession.ts
 
-TTS queue stability
+TTS request management
 
-Trailing text preservation
+Queue management
 
-Devanagari sentence segmentation
+Concurrent fetching
 
-Example validation commands:
+Session state control
 
-npx tsc --noEmit
-npm run build
+AudioPlayer.ts
 
-🚀 Getting Started
+Audio playback
 
-1. Clone the repository
+Fast stop
 
-git clone <your-repository-url>
-cd <project-directory>
+Playback recovery
 
-2. Install dependencies
+Watchdog handling
 
-npm install
+👥 Contributors & Contributions
 
-3. Configure environment variables
+MANTRA was built collaboratively by four contributors.
 
-Create a .env.local file and add the API credentials required by the project.
+👑 Manish — Project Lead / Core Developer
 
-GEMINI_API_KEY=your_gemini_api_key
-RIME_API_KEY=your_rime_api_key
+Primary Contribution
 
-Never commit real API keys or secrets to GitHub.
+Led the overall MANTRA project development and architecture.
 
-4. Start development server
+Designed and coordinated the real-time voice-assistant workflow.
 
-npm run dev
+Worked on the integration of Gemini AI, Speech Recognition, Rime TTS, VAD, and audio playback.
 
-Open:
+Worked on the end-to-end voice conversation pipeline.
 
-http://localhost:3000
+Worked on real-time response streaming and low-latency voice interaction.
 
-👥 Contributors
+Implemented and coordinated fixes for voice interruption / barge-in behavior.
 
-MANTRA was developed collaboratively by the following contributors.
+Worked on desktop and Android voice-flow reliability.
 
-Manan274
+Worked on audio queue, TTS sequencing, and playback stability.
 
-Role: AI & Voice Pipeline
+Led debugging, testing, performance optimization, and production verification.
 
-Worked on AI conversation and response-flow integration.
+Coordinated the final deployment and project integration.
 
-Contributed to real-time voice interaction logic.
+👨‍💻 Manan274 — AI & Voice Pipeline
 
-Worked on Gemini response streaming and conversational behavior.
+Primary Contribution
 
-Assisted with voice-session debugging and optimization.
+Contributed to AI conversation and response-flow integration.
 
-Shravan-Bhagat
+Worked on Gemini response handling.
 
-Role: Frontend & User Experience
+Assisted with real-time voice interaction logic.
+
+Contributed to voice-session debugging and optimization.
+
+Assisted with testing the conversational pipeline.
+
+👨‍💻 Shravan-Bhagat — Frontend & User Experience
+
+Primary Contribution
 
 Contributed to the MANTRA web interface.
 
@@ -382,56 +379,145 @@ Worked on voice interaction UI and user experience.
 
 Assisted with responsive desktop/mobile behavior.
 
-Contributed to frontend integration and application polish.
+Contributed to frontend integration and visual application polish.
 
-TejasMore26
+Assisted with overall usability improvements.
 
-Role: Voice, Audio & Testing
+👨‍💻 TejasMore26 — Voice, Audio & Testing
 
-Contributed to voice/audio functionality.
+Primary Contribution
 
-Worked on TTS playback and real-time audio behavior.
+Contributed to voice and audio functionality.
+
+Worked on TTS playback behavior.
 
 Assisted with interruption and voice-session testing.
 
-Contributed to debugging and stability verification.
+Contributed to debugging voice-related issues.
 
-Contributions were collaborative, and the responsibilities above represent the primary areas of contribution.
+Assisted with stability and end-to-end verification.
 
-📈 Project Highlights
+🤝 Team Collaboration
 
-Real-time AI voice conversation
+The project was developed collaboratively, with contributors working across:
 
-Streaming Gemini responses
+Frontend development
 
-Progressive TTS synthesis
+AI integration
 
-Low-latency first-audio delivery
+Voice processing
 
-Hands-free interruption
+Speech recognition
 
-Mobile-aware speech recognition
+Text-to-speech
 
-Multilingual / Devanagari support
+Audio management
 
-Robust audio queue management
+Mobile compatibility
 
-Production deployment on Vercel
+Performance optimization
 
-🌐 Try MANTRA
+Testing and debugging
 
-Live Demo
+Production deployment
+
+🧪 Testing & Verification
+
+MANTRA was tested across multiple real-time voice scenarios:
+
+TypeScript compilation
+
+Production build
+
+Desktop voice conversations
+
+Android voice conversations
+
+Long AI responses
+
+Multiple consecutive voice turns
+
+Barge-in / interruption
+
+TTS queue stability
+
+Audio playback recovery
+
+Trailing response preservation
+
+Hindi and Marathi sentence segmentation
+
+Validation
+
+npx tsc --noEmit
+npm run build
+
+🚀 Getting Started
+
+Clone the repository
+
+git clone <your-repository-url>
+cd <project-directory>
+
+Install dependencies
+
+npm install
+
+Configure environment variables
+
+Create a .env.local file:
+
+GEMINI_API_KEY=your_gemini_api_key
+RIME_API_KEY=your_rime_api_key
+
+Never commit real API keys or secrets to GitHub.
+
+Run locally
+
+npm run dev
+
+Then open:
+
+http://localhost:3000
+
+🌐 Live Deployment
+
+MANTRA is deployed on Vercel.
+
+Live Website
 
 👉 https://voxflow-lime.vercel.app/
 
-📄 License
+📌 Project Highlights
 
-This project is intended for educational, development, and demonstration purposes.
+Real-time AI voice assistant
 
-<div align="center">
+Gemini streaming responses
+
+Rime streaming TTS
+
+Low-latency first audio
+
+Hands-free interruption
+
+Android voice support
+
+Hindi / Marathi Devanagari support
+
+Robust audio queue management
+
+Multi-turn conversational stability
+
+Production deployment
 
 🎙️ MANTRA
 
 Speak naturally. Think intelligently. Respond instantly.
+
+<div align="center">
+
+Built with ❤️ by the MANTRA Team
+
+Manish • Manan274 • Shravan-Bhagat • TejasMore26
 
 </div>
