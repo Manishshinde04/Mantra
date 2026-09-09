@@ -220,10 +220,8 @@ export class VoiceInputManager {
   public startBargeInListening(config: AudioCaptureConfig = {}): void {
     const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
     if (!isAndroid) {
-      // Desktop already has continuous full-duplex listening active.
-      if (this.state !== "listening") {
-        this.start(config);
-      }
+      // Desktop full-duplex capture is active while the voice session is listening.
+      // If voice session was not active (e.g. typed input), do NOT initiate mic capture.
       return;
     }
 
@@ -533,6 +531,7 @@ export class VoiceInputManager {
       this.speechRecognizer = recognizer;
 
       recognizer.onstart = () => {
+        console.log("[MANTRA] SpeechRecognition onstart", { timestamp: Date.now() });
         console.log("[VOXFLOW-ANDROID] onstart", { timestamp: Date.now(), delayMs: performance.now() - tStart });
         console.log("[VOXFLOW-MIC] F. SPEECH RECOGNITION onstart");
         if (gen !== this.recognitionGeneration || this.isExplicitlyStopped || this.state !== "listening") {
@@ -587,6 +586,14 @@ export class VoiceInputManager {
 
         const trimmedFinal = finalTranscript.trim();
         const trimmedInterim = interimTranscript.trim();
+
+        if (trimmedFinal || trimmedInterim) {
+          console.log("[MANTRA] SpeechRecognition onresult", {
+            isFinal: Boolean(trimmedFinal),
+            text: trimmedFinal || trimmedInterim,
+            timestamp: Date.now(),
+          });
+        }
 
         console.log("[VOXFLOW-ANDROID] onresult", {
           interim: trimmedInterim || null,
@@ -676,6 +683,11 @@ export class VoiceInputManager {
 
       recognizer.onerror = (event: any) => {
         const errCode = event.error;
+        console.error("[MANTRA] SpeechRecognition.onerror", {
+          error: errCode,
+          message: (event as any).message || "",
+          timestamp: Date.now(),
+        });
         console.error("[VOXFLOW-ANDROID] onerror", {
           error: errCode,
           message: (event as any).message || "",
@@ -690,6 +702,11 @@ export class VoiceInputManager {
           activeToken: this.recognitionGeneration,
           willRestart: (this.state === "listening" && !this.isExplicitlyStopped),
         });
+
+        if (this.speechRecognizer === recognizer) {
+          this.isRecognitionRunning = false;
+          this.isRecognitionStarting = false;
+        }
 
         if (gen !== this.recognitionGeneration) return;
 
@@ -724,17 +741,20 @@ export class VoiceInputManager {
           return;
         }
 
-        // Desktop error handling (100% unchanged)
+        // Desktop error handling
         if (errCode === "no-speech" || errCode === "aborted") {
           return;
         }
 
         if (errCode === "not-allowed") {
+          this.state = "error";
           this.emitter.emit("error", {
             type: "permission-denied",
             message: "Microphone access is blocked. Allow microphone access and try again.",
             originalError: event,
           });
+          this.stop();
+          return;
         }
       };
 
@@ -754,6 +774,12 @@ export class VoiceInputManager {
           state: this.state,
           isExplicitlyStopped: this.isExplicitlyStopped,
         });
+
+        if (this.speechRecognizer === recognizer) {
+          this.speechRecognizer = null;
+          this.isRecognitionRunning = false;
+          this.isRecognitionStarting = false;
+        }
 
         if (gen !== this.recognitionGeneration) return;
         this.isRecognitionRunning = false;
@@ -789,6 +815,7 @@ export class VoiceInputManager {
         this.scheduleSpeechRecognitionRestart();
       };
 
+      console.log("[MANTRA] SpeechRecognition.start() called", { timestamp: Date.now() });
       console.log("[VOXFLOW-ANDROID] 3. IMMEDIATE START:", {
         timestamp: Date.now(),
         delayFromTapMs: performance.now() - tStart,
@@ -803,6 +830,7 @@ export class VoiceInputManager {
     } catch (err: any) {
       this.isRecognitionStarting = false;
       this.isRecognitionRunning = false;
+      this.speechRecognizer = null;
       console.error("[VOXFLOW-ANDROID] 3. IMMEDIATE START SYNCHRONOUS EXCEPTION:", {
         name: err?.name,
         message: err?.message,

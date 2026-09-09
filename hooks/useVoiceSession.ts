@@ -192,6 +192,7 @@ export function useVoiceSession() {
       }));
 
       telemetryRef.current.geminiStarted = Date.now();
+      console.log("[MANTRA] Gemini request started", { requestId, turns: validHistory.length });
       console.log(`[CHAT] start requestId=${requestId} turns=${validHistory.length}`);
       console.log("[VOXFLOW-MIC] I. GEMINI request started", {
         requestId,
@@ -209,17 +210,20 @@ export function useVoiceSession() {
             onChunk: (accumulatedText, genId) => {
               if (!telemetryRef.current.firstGeminiText) {
                 telemetryRef.current.firstGeminiText = Date.now();
+                console.log("[MANTRA] Gemini response received", { requestId, chunkLength: accumulatedText.length });
                 console.log("[VOXFLOW-MIC] I. GEMINI response started", { timestamp: Date.now() });
               }
 
               // 1. Initialize TTSSession on first chunk if not yet created
               if (!activeTtsSessionRef.current && audioPlayerRef.current) {
                 telemetryRef.current.firstRimeRequest = Date.now();
+                console.log("[MANTRA] TTS request started", { genId: genId || `gen-${Date.now()}` });
 
                 const tts = new TTSSession(genId || `gen-${Date.now()}`, audioPlayerRef.current, {
                   onPlayStart: () => {
                     telemetryRef.current.firstPlaybackStarted = Date.now();
                     playbackStartTimeRef.current = Date.now();
+                    console.log("[MANTRA] audio playback started", { timestamp: Date.now() });
                     if (managerRef.current) {
                       managerRef.current.setHysteresis(1.6);
                       managerRef.current.setTTSPlaying(true);
@@ -366,11 +370,13 @@ export function useVoiceSession() {
                 }
                 activeTtsSessionRef.current.completeText();
               } else if (audioPlayerRef.current && fullText.trim()) {
+                console.log("[MANTRA] TTS request started", { genId: genId || `gen-${Date.now()}`, fullTextLength: fullText.length });
                 console.log(`[VOXFLOW-E2E] [TTS] initializing TTS session in onDone for full text: length=${fullText.length}`);
                 const tts = new TTSSession(genId || `gen-${Date.now()}`, audioPlayerRef.current, {
                   onPlayStart: () => {
                     telemetryRef.current.firstPlaybackStarted = Date.now();
                     playbackStartTimeRef.current = Date.now();
+                    console.log("[MANTRA] audio playback started", { timestamp: Date.now() });
                     if (managerRef.current) {
                       managerRef.current.setHysteresis(1.6);
                       managerRef.current.setTTSPlaying(true);
@@ -973,9 +979,9 @@ export function useVoiceSession() {
         return;
       }
 
-      // Unlock audio on send click
+      // Unlock audio concurrently in the background; do NOT await before sending
       if (audioPlayerRef.current) {
-        await audioPlayerRef.current.unlockAudio();
+        audioPlayerRef.current.unlockAudio().catch(() => {});
       }
 
       // Cancel previous active speech if user sends a new message
@@ -1002,6 +1008,7 @@ export function useVoiceSession() {
       setMessages(nextMessages);
 
       const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      console.log("[MANTRA] typed submit fired:", { requestId, text: trimmed });
       console.log(`[CHAT] typed message submitted requestId=${requestId}:`, trimmed);
       triggerGeminiResponseRef.current(nextMessages, requestId);
     },

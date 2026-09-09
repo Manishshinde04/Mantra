@@ -12,7 +12,7 @@ export class GeminiProvider implements AIProvider {
       throw new Error("GEMINI_API_KEY is not configured. Please set GEMINI_API_KEY in .env.local.");
     }
     this.client = new GoogleGenAI({ apiKey: key });
-    this.modelName = modelName || process.env.GEMINI_MODEL || "gemini-3.8-flash";
+    this.modelName = modelName || process.env.GEMINI_MODEL || "gemini-3.6-flash";
   }
 
   public async getStream(
@@ -49,9 +49,10 @@ export class GeminiProvider implements AIProvider {
       throw new Error("Cannot send empty message history.");
     }
 
+    const fallbackModel = "gemini-3.6-flash";
     const modelsToTry = [
       this.modelName,
-      this.modelName.includes("lite") ? "gemini-3.5-flash" : "gemini-3.5-flash-lite",
+      ...(this.modelName !== fallbackModel ? [fallbackModel] : ["gemini-2.5-flash"]),
     ];
 
     let lastError: any = null;
